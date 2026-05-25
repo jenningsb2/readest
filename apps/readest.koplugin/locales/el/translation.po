@@ -257,6 +257,9 @@ msgstr "Αποστολή βιβλίων τώρα"
 msgid "Pull books now"
 msgstr "Λήψη βιβλίων τώρα"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "Αποστολή προόδου ανάγνωσης τώρα"
 
@@ -308,8 +311,14 @@ msgstr "Τελευταίος συγχρονισμός"
 msgid "Sync Info"
 msgstr "Πληροφορίες συγχρονισμού"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "Η βιβλιοθήκη δεν αρχικοποιήθηκε"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "Τα βιβλία συγχρονίστηκαν"

@@ -257,6 +257,9 @@ msgstr "Kitapları şimdi gönder"
 msgid "Pull books now"
 msgstr "Kitapları şimdi al"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "Okuma ilerlemesini şimdi gönder"
 
@@ -308,8 +311,14 @@ msgstr "Son senkronizasyon"
 msgid "Sync Info"
 msgstr "Senkronizasyon bilgisi"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "Kütüphane başlatılmadı"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "Kitaplar senkronize edildi"

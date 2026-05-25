@@ -257,6 +257,9 @@ msgstr "දැන් පොත් යවන්න"
 msgid "Pull books now"
 msgstr "දැන් පොත් ලබාගන්න"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "කියවීමේ ප්‍රගතිය දැන් යවන්න"
 
@@ -308,8 +311,14 @@ msgstr "අවසන් සමමුහූර්තකරණය"
 msgid "Sync Info"
 msgstr "සමමුහූර්ත තොරතුරු"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "පුස්තකාලය ආරම්භ කර නොමැත"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "පොත් සමමුහූර්ත විය"

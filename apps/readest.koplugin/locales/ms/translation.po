@@ -257,6 +257,9 @@ msgstr "Hantar buku sekarang"
 msgid "Pull books now"
 msgstr "Tarik buku sekarang"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "Hantar kemajuan bacaan sekarang"
 
@@ -308,8 +311,14 @@ msgstr "Penyegerakan terakhir"
 msgid "Sync Info"
 msgstr "Maklumat penyegerakan"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "Pustaka belum dimulakan"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "Buku diselaraskan"

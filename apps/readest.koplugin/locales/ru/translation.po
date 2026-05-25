@@ -257,6 +257,9 @@ msgstr "Отправить книги сейчас"
 msgid "Pull books now"
 msgstr "Получить книги сейчас"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "Отправить прогресс чтения сейчас"
 
@@ -308,8 +311,14 @@ msgstr "Последняя синхронизация"
 msgid "Sync Info"
 msgstr "Сведения о синхронизации"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "Библиотека не инициализирована"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "Книги синхронизированы"

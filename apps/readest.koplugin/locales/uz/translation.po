@@ -257,6 +257,9 @@ msgstr "Kitoblarni hozir yuborish"
 msgid "Pull books now"
 msgstr "Kitoblarni hozir olish"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "Oʻqish jarayonini hozir yuborish"
 
@@ -308,8 +311,14 @@ msgstr "Oxirgi sinxronlash"
 msgid "Sync Info"
 msgstr "Sinxronlash maʼlumoti"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "Kutubxona ishga tushirilmagan"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "Kitoblar sinxronlandi"

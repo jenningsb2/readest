@@ -257,6 +257,9 @@ msgstr "立即推送书籍"
 msgid "Pull books now"
 msgstr "立即拉取书籍"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "立即推送阅读进度"
 
@@ -308,8 +311,14 @@ msgstr "上次同步"
 msgid "Sync Info"
 msgstr "同步信息"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "书库未初始化"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "书籍已同步"

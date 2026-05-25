@@ -257,6 +257,9 @@ msgstr "अभी पुस्तकें पुश करें"
 msgid "Pull books now"
 msgstr "अभी पुस्तकें पुल करें"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "अभी पठन प्रगति भेजें"
 
@@ -308,8 +311,14 @@ msgstr "अंतिम सिंक"
 msgid "Sync Info"
 msgstr "सिंक जानकारी"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "लाइब्रेरी आरंभीकृत नहीं"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "पुस्तकें सिंक हुईं"

@@ -257,6 +257,9 @@ msgstr "Pošlji knjige zdaj"
 msgid "Pull books now"
 msgstr "Pridobi knjige zdaj"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "Pošlji napredek branja zdaj"
 
@@ -308,8 +311,14 @@ msgstr "Zadnja sinhronizacija"
 msgid "Sync Info"
 msgstr "Podatki o sinhronizaciji"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "Knjižnica ni inicializirana"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "Knjige sinhronizirane"

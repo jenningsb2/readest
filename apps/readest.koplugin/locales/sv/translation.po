@@ -257,6 +257,9 @@ msgstr "Skicka böcker nu"
 msgid "Pull books now"
 msgstr "Hämta böcker nu"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "Skicka läsförloppet nu"
 
@@ -308,8 +311,14 @@ msgstr "Senast synkroniserad"
 msgid "Sync Info"
 msgstr "Synkroniseringsinfo"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "Biblioteket är inte initierat"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "Böckerna synkroniserade"

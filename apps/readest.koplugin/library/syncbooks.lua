@@ -637,6 +637,49 @@ function M.downloadCover(book, opts, cb)
 end
 
 -- ---------------------------------------------------------------------------
+-- ensure_local_cover_png(file_path, dst_path) — best-effort cover staging.
+-- ---------------------------------------------------------------------------
+-- The cover cache at <covers_dir>/<hash>.png is normally populated only by
+-- downloadCover (cloud → disk), so a book added locally on KOReader has no
+-- cover to upload. Here we extract the book's own cover via the bundled
+-- coverbrowser BookInfoManager (already used for the Library grid) and write
+-- it out as a PNG so uploadBook can push it to storage.
+--
+-- Live-KOReader only (BIM + blitbuffer:writePNG). Every failure is swallowed:
+-- a missing or unwritable cover must never block the book-file upload. Returns
+-- true only when a PNG exists at dst_path afterward.
+local function ensure_local_cover_png(file_path, dst_path)
+    local lfs = require("libs/libkoreader-lfs")
+    local logger = require("logger")
+    if not dst_path then return false end
+    if lfs.attributes(dst_path, "mode") == "file" then return true end
+    if not file_path or lfs.attributes(file_path, "mode") ~= "file" then return false end
+
+    local ok_bim, BIM = pcall(require, "bookinfomanager")
+    if not ok_bim or not BIM then return false end
+    local info = BIM:getBookInfo(file_path, true)
+    local bb = info and info.cover_bb
+    if not bb then
+        -- Not extracted yet — kick off background extraction so a later
+        -- upload attempt finds it. Nothing to stage this pass.
+        pcall(function() BIM:extractInBackground({ { file_path } }) end)
+        return false
+    end
+
+    local dir = dst_path:match("^(.*)/[^/]+$")
+    if dir and lfs.attributes(dir, "mode") ~= "directory" then
+        lfs.mkdir(dir)
+    end
+    local ok_write, err = pcall(function() bb:writePNG(dst_path) end)
+    if not ok_write then
+        logger.warn("ReadestLibrary ensure_local_cover_png: writePNG failed: "
+            .. tostring(err))
+        return false
+    end
+    return lfs.attributes(dst_path, "mode") == "file"
+end
+
+-- ---------------------------------------------------------------------------
 -- uploadBook(book, opts, cb) — push a local book file to Readest cloud.
 -- ---------------------------------------------------------------------------
 -- Two-step flow mirroring `apps/readest-app/src/libs/storage.ts:42-78`:
@@ -683,6 +726,12 @@ function M.uploadBook(book, opts, cb)
         CLOUD_BOOKS_SUBDIR, book.hash, book.hash, ext)
     local cover_path = opts.covers_dir
         and (opts.covers_dir .. "/" .. book.hash .. ".png") or nil
+    -- Locally-added books have no cached cloud cover; extract the book's own
+    -- cover and stage it as a PNG so it uploads alongside the file. Best-
+    -- effort — never blocks the book upload.
+    if cover_path then
+        ensure_local_cover_png(book.file_path, cover_path)
+    end
     local cover_attr = cover_path and lfs.attributes(cover_path) or nil
     local has_cover = cover_attr and cover_attr.mode == "file"
 

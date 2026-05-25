@@ -257,6 +257,9 @@ msgstr "இப்போது புத்தகங்களை அனுப்�
 msgid "Pull books now"
 msgstr "இப்போது புத்தகங்களைப் பெறு"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "வாசிப்பு முன்னேற்றத்தை இப்போது அனுப்பு"
 
@@ -308,8 +311,14 @@ msgstr "கடைசி ஒத்திசைவு"
 msgid "Sync Info"
 msgstr "ஒத்திசைவு தகவல்"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "நூலகம் துவக்கப்படவில்லை"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "புத்தகங்கள் ஒத்திசைக்கப்பட்டன"

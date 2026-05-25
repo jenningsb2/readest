@@ -257,6 +257,9 @@ msgstr "Trimite cărțile acum"
 msgid "Pull books now"
 msgstr "Preia cărțile acum"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "Trimite progresul de citire acum"
 
@@ -308,8 +311,14 @@ msgstr "Ultima sincronizare"
 msgid "Sync Info"
 msgstr "Informații de sincronizare"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "Biblioteca nu este inițializată"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "Cărți sincronizate"

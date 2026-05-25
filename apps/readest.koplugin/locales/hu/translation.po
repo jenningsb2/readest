@@ -257,6 +257,9 @@ msgstr "Könyvek küldése most"
 msgid "Pull books now"
 msgstr "Könyvek letöltése most"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "Olvasási haladás küldése most"
 
@@ -308,8 +311,14 @@ msgstr "Utolsó szinkronizálás"
 msgid "Sync Info"
 msgstr "Szinkronizálási adatok"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "A könyvtár nincs inicializálva"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "Könyvek szinkronizálva"

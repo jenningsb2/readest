@@ -349,6 +349,16 @@ function ReadestSync:addToMainMenu(menu_items)
                 separator = true,
             },
             {
+                text = _("Upload this book to cloud"),
+                enabled_func = function()
+                    return self.settings.access_token ~= nil and self.ui.document ~= nil
+                end,
+                callback = function()
+                    self:uploadCurrentBook()
+                end,
+                separator = true,
+            },
+            {
                 text = _("Push reading progress now"),
                 enabled_func = function()
                     return self.settings.access_token ~= nil and self.ui.document ~= nil
@@ -664,6 +674,111 @@ function ReadestSync:touchOpenBook()
             .. " (book not in LibraryStore index)")
     end
     return touched
+end
+
+-- Upload the currently-open book's exact file to Readest cloud, then push
+-- its metadata record so it appears in the library on every device. Mirrors
+-- the Library view's "Upload to Cloud" action (librarywidget.handleHold) but
+-- sources the book from the active ReaderUI instead of a tapped grid row.
+function ReadestSync:uploadCurrentBook()
+    if not self.settings.access_token or not self.settings.user_id then
+        UIManager:show(InfoMessage:new{ text = _("Please login first"), timeout = 2 })
+        return
+    end
+    if not self.ui.document or not self.ui.doc_settings then
+        UIManager:show(InfoMessage:new{ text = _("No book is open"), timeout = 2 })
+        return
+    end
+    local file = self.ui.document.file
+    local hash = self.ui.doc_settings:readSetting("partial_md5_checksum")
+    if not file or not hash or hash == "" then
+        UIManager:show(InfoMessage:new{
+            text = _("Could not identify this book."), timeout = 3,
+        })
+        return
+    end
+    local ext = file:match("%.([^./\\]+)$")
+    local format = readest_format_for_ext(ext)
+    if not format then
+        UIManager:show(InfoMessage:new{
+            text = _("Unsupported book format."), timeout = 3,
+        })
+        return
+    end
+    local store = self:getLibraryStore()
+    if not store then
+        UIManager:show(InfoMessage:new{ text = _("Library not initialized"), timeout = 2 })
+        return
+    end
+
+    local existing = store:_getRowRaw(hash)
+    local title = existing and existing.title
+    if not title or title == "" then
+        local basename = file:match("([^/]+)$") or file
+        title = basename:gsub("%.[^.]+$", "")
+    end
+    local now = math.floor(os.time() * 1000)
+    local first_row = {
+        hash          = hash,
+        title         = title,
+        format        = format,
+        file_path     = file,
+        local_present = 1,
+        updated_at    = now,
+        _clear_fields = { "deleted_at" },
+    }
+    if not (existing and existing.created_at) then first_row.created_at = now end
+    store:upsertBook(first_row)
+    local row = store:_getRowRaw(hash)
+
+    local progress = InfoMessage:new{ text = _("Uploading…") .. " " .. (title or "") }
+    UIManager:show(progress)
+    local DataStorage = require("datastorage")
+    local syncbooks = require("library.syncbooks")
+    syncbooks.uploadBook(row, {
+        sync_auth  = SyncAuth,
+        sync_path  = self.path,
+        settings   = self.settings,
+        covers_dir = DataStorage:getSettingsDir() .. "/readest_covers",
+    }, function(success, msg, status)
+        UIManager:close(progress)
+        if not success then
+            local text
+            if status == 403 and msg and msg:find("quota", 1, true) then
+                text = _("Storage quota exceeded.")
+            else
+                text = _("Upload failed.") .. " (" .. tostring(msg or status) .. ")"
+            end
+            UIManager:show(InfoMessage:new{ text = text, timeout = 4 })
+            return
+        end
+        local now2 = math.floor(os.time() * 1000)
+        store:upsertBook({
+            hash          = hash,
+            cloud_present = 1,
+            uploaded_at   = now2,
+            updated_at    = now2,
+            _clear_fields = { "deleted_at" },
+        })
+        local pushed = {}
+        for k, v in pairs(row) do pushed[k] = v end
+        pushed.cloud_present = 1
+        pushed.uploaded_at   = now2
+        pushed.updated_at    = now2
+        pushed.deleted_at    = nil
+        syncbooks.pushBook(pushed, {
+            sync_auth = SyncAuth,
+            sync_path = self.path,
+            settings  = self.settings,
+        }, function()
+            local LibraryWidget = require("library.librarywidget")
+            if LibraryWidget._menu then LibraryWidget.refresh() end
+        end)
+        UIManager:show(InfoMessage:new{
+            text = _("Uploaded to Readest:") .. " " .. (title or ""),
+            timeout = 2,
+        })
+    end)
 end
 
 -- syncBooksLibrary(mode, interactive) — bidirectional book-row sync,

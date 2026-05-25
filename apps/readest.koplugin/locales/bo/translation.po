@@ -257,6 +257,9 @@ msgstr "དེབ་རྣམས་ད་ལྟ་སྐུར་"
 msgid "Pull books now"
 msgstr "དེབ་རྣམས་ད་ལྟ་ལེན་"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "ད་ལྟ་ཀློག་པའི་འཕེལ་རིམ་སྐུར་བ།"
 
@@ -308,8 +311,14 @@ msgstr "མཐའ་མའི་མཉམ་འགྱུར།"
 msgid "Sync Info"
 msgstr "མཉམ་འགྱུར་གསལ་བཤད།"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "དཔེ་མཛོད་འགོ་འཛུགས་མ་བྱས་པ་"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "དེབ་མཉམ་སྦྱོར་ཟིན་"

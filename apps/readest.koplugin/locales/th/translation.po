@@ -257,6 +257,9 @@ msgstr "ส่งหนังสือเดี๋ยวนี้"
 msgid "Pull books now"
 msgstr "ดึงหนังสือเดี๋ยวนี้"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "ส่งความคืบหน้าการอ่านตอนนี้"
 
@@ -308,8 +311,14 @@ msgstr "ซิงค์ล่าสุด"
 msgid "Sync Info"
 msgstr "ข้อมูลการซิงค์"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "ยังไม่ได้เริ่มต้นคลัง"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "ซิงค์หนังสือแล้ว"

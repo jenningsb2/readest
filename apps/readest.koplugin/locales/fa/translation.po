@@ -257,6 +257,9 @@ msgstr "اکنون ارسال کتاب‌ها"
 msgid "Pull books now"
 msgstr "اکنون دریافت کتاب‌ها"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "ارسال پیشرفت مطالعه اکنون"
 
@@ -308,8 +311,14 @@ msgstr "آخرین همگام‌سازی"
 msgid "Sync Info"
 msgstr "اطلاعات همگام‌سازی"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "کتابخانه راه‌اندازی نشده است"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "کتاب‌ها همگام شدند"

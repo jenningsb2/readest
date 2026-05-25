@@ -257,6 +257,9 @@ msgstr "Gửi sách ngay"
 msgid "Pull books now"
 msgstr "Lấy sách ngay"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "Đẩy tiến trình đọc ngay"
 
@@ -308,8 +311,14 @@ msgstr "Lần đồng bộ cuối"
 msgid "Sync Info"
 msgstr "Thông tin đồng bộ"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "Thư viện chưa được khởi tạo"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "Đã đồng bộ sách"

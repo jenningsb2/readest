@@ -257,6 +257,9 @@ msgstr "এখনই বই পুশ করুন"
 msgid "Pull books now"
 msgstr "এখনই বই পুল করুন"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "এখন পড়ার অগ্রগতি পাঠান"
 
@@ -308,8 +311,14 @@ msgstr "শেষ সিঙ্ক"
 msgid "Sync Info"
 msgstr "সিঙ্ক তথ্য"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "লাইব্রেরি প্রারম্ভ করা হয়নি"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "বইগুলি সিঙ্ক হয়েছে"

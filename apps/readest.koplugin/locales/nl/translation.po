@@ -257,6 +257,9 @@ msgstr "Boeken nu pushen"
 msgid "Pull books now"
 msgstr "Boeken nu pullen"
 
+msgid "Upload this book to cloud"
+msgstr ""
+
 msgid "Push reading progress now"
 msgstr "Leesvoortgang nu verzenden"
 
@@ -308,8 +311,14 @@ msgstr "Laatst gesynchroniseerd"
 msgid "Sync Info"
 msgstr "Synchronisatie-info"
 
+msgid "Could not identify this book."
+msgstr ""
+
 msgid "Library not initialized"
 msgstr "Bibliotheek niet geïnitialiseerd"
+
+msgid "Uploaded to Readest:"
+msgstr ""
 
 msgid "Books synced"
 msgstr "Boeken gesynchroniseerd"
