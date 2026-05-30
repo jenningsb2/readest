@@ -160,8 +160,13 @@ const AnnotationRangeEditor: React.FC<AnnotationRangeEditorProps> = ({
   const viewSettings = getViewSettings(bookKey);
   const isEink = settings.globalViewSettings.isEink;
   const einkFgColor = isDarkMode ? '#ffffff' : '#000000';
-  const { handlePositions, getHandlePositionsFromRange, handleAnnotationRangeChange } =
-    useAnnotationEditor({ bookKey, annotation, getAnnotationText, setSelection });
+  const {
+    handlePositions,
+    getHandlePositionsFromRange,
+    beginRangeDrag,
+    dragRangeTo,
+    endRangeDrag,
+  } = useAnnotationEditor({ bookKey, annotation, getAnnotationText, setSelection });
 
   const handleColorHex = getHighlightColorHex(settings, handleColor) ?? '#FFFF00';
   const draggingRef = useRef<'start' | 'end' | null>(null);
@@ -202,9 +207,10 @@ const AnnotationRangeEditor: React.FC<AnnotationRangeEditorProps> = ({
       dragPointerTypeRef.current = pointerType;
       setDraggingHandle('start');
       setLoupePoint({ ...startRef.current });
+      beginRangeDrag('start', selection.range, selection.index);
       onStartEdit();
     },
-    [onStartEdit],
+    [onStartEdit, beginRangeDrag, selection.range, selection.index],
   );
 
   const handleEndDragStart = useCallback(
@@ -213,9 +219,10 @@ const AnnotationRangeEditor: React.FC<AnnotationRangeEditorProps> = ({
       dragPointerTypeRef.current = pointerType;
       setDraggingHandle('end');
       setLoupePoint({ ...endRef.current });
+      beginRangeDrag('end', selection.range, selection.index);
       onStartEdit();
     },
-    [onStartEdit],
+    [onStartEdit, beginRangeDrag, selection.range, selection.index],
   );
 
   const handleStartDrag = useCallback(
@@ -223,9 +230,9 @@ const AnnotationRangeEditor: React.FC<AnnotationRangeEditorProps> = ({
       setCurrentStart(point);
       setLoupePoint(point);
       startRef.current = point;
-      handleAnnotationRangeChange(point, endRef.current, isVertical, true);
+      dragRangeTo(point);
     },
-    [isVertical, handleAnnotationRangeChange],
+    [dragRangeTo],
   );
 
   const handleEndDrag = useCallback(
@@ -233,17 +240,17 @@ const AnnotationRangeEditor: React.FC<AnnotationRangeEditorProps> = ({
       setCurrentEnd(point);
       setLoupePoint(point);
       endRef.current = point;
-      handleAnnotationRangeChange(startRef.current, point, isVertical, true);
+      dragRangeTo(point);
     },
-    [isVertical, handleAnnotationRangeChange],
+    [dragRangeTo],
   );
 
   const handleDragEnd = useCallback(() => {
     draggingRef.current = null;
     setDraggingHandle(null);
     setLoupePoint(null);
-    handleAnnotationRangeChange(startRef.current, endRef.current, isVertical, false);
-  }, [isVertical, handleAnnotationRangeChange]);
+    endRangeDrag();
+  }, [endRangeDrag]);
 
   if (currentStart.x === 0 && currentStart.y === 0) {
     return null;

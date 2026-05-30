@@ -311,3 +311,107 @@ export const getTextFromRange = (range: Range, rejectTags: string[] = []): strin
 
   return text;
 };
+
+/**
+ * Which edge of the reader viewport a drag point has entered for cross-page
+ * selection. `'start'` means scroll toward the document start (extend the
+ * selection backward), `'end'` means scroll toward the document end. `null`
+ * means the point is not inside an auto-scroll band.
+ */
+export type ScrollEdge = 'start' | 'end' | null;
+
+export interface AutoScrollEdgeOptions {
+  /** Vertical writing mode (CJK). The block axis is then horizontal. */
+  vertical?: boolean;
+  /** Right-to-left block flow (e.g. vertical-rl). */
+  rtl?: boolean;
+  /** Thickness in px of the edge band that triggers auto-scroll. */
+  edgeSize?: number;
+}
+
+/**
+ * Detect whether a drag point sits within the leading/trailing auto-scroll
+ * band of the reader viewport, mirroring KOReader's corner-scroll trigger.
+ *
+ * In horizontal writing the bands are the top (start) and bottom (end) of the
+ * viewport. In vertical writing they are the left/right sides, flipped for
+ * `vertical-rl` so the band nearest the document start always maps to `'start'`.
+ * The band is clamped to a third of the relevant dimension so tiny viewports
+ * never report both edges at once.
+ */
+export const getAutoScrollEdge = (
+  point: Point,
+  rect: Rect,
+  { vertical = false, rtl = false, edgeSize = 64 }: AutoScrollEdgeOptions = {},
+): ScrollEdge => {
+  const width = rect.right - rect.left;
+  const height = rect.bottom - rect.top;
+  if (width <= 0 || height <= 0) return null;
+
+  if (!vertical) {
+    const band = Math.min(edgeSize, height / 3);
+    if (point.x < rect.left || point.x > rect.right) return null;
+    const nearStart = point.y <= rect.top + band;
+    const nearEnd = point.y >= rect.bottom - band;
+    if (nearStart && nearEnd) return null;
+    if (nearStart) return 'start';
+    if (nearEnd) return 'end';
+    return null;
+  }
+
+  const band = Math.min(edgeSize, width / 3);
+  if (point.y < rect.top || point.y > rect.bottom) return null;
+  const nearLeft = point.x <= rect.left + band;
+  const nearRight = point.x >= rect.right - band;
+  if (nearLeft && nearRight) return null;
+  // vertical-rl: the document starts on the right; vertical-lr: on the left.
+  if (rtl) {
+    if (nearRight) return 'start';
+    if (nearLeft) return 'end';
+  } else {
+    if (nearLeft) return 'start';
+    if (nearRight) return 'end';
+  }
+  return null;
+};
+
+export interface CaretPosition {
+  node: Node;
+  offset: number;
+}
+
+/**
+ * Build a normalized, word-snapped Range between two caret positions in the
+ * same document. The positions may be supplied in any order; the result always
+ * runs from the earlier document position to the later one. This lets the fixed
+ * (non-dragged) selection endpoint be kept as a stable node/offset anchor while
+ * only the dragged endpoint is re-hit-tested — so the anchor can scroll fully
+ * off-screen during a cross-page drag without breaking the range. Returns
+ * `null` when the positions collapse to an empty range or are invalid.
+ */
+export const buildDirectedRange = (
+  doc: Document,
+  a: CaretPosition,
+  b: CaretPosition,
+): Range | null => {
+  try {
+    const range = doc.createRange();
+    const comparison = a.node.compareDocumentPosition(b.node);
+    const needsSwap =
+      !!(comparison & Node.DOCUMENT_POSITION_PRECEDING) ||
+      (a.node === b.node && a.offset > b.offset);
+    if (needsSwap) {
+      range.setStart(b.node, b.offset);
+      range.setEnd(a.node, a.offset);
+    } else {
+      range.setStart(a.node, a.offset);
+      range.setEnd(b.node, b.offset);
+    }
+    if (range.collapsed) return null;
+    snapRangeToWords(range);
+    if (range.collapsed) return null;
+    return range;
+  } catch {
+    return null;
+  }
+};
