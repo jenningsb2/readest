@@ -742,6 +742,17 @@ const Annotator: React.FC<{ bookKey: string }> = ({ bookKey }) => {
       annotations.push(annotation);
       views.forEach((view) => view?.addAnnotation(annotation));
       setSelection({ ...selection, cfi, annotated: true });
+      // For a plain new highlight (not the annotate flow, which opens the
+      // notebook), enter edit mode so the selection handles appear immediately.
+      // This lets a new highlight be extended across page boundaries
+      // (cross-page) just like an existing one. Clear the native text selection
+      // so the custom handles are the only selection UI — the drawn overlay now
+      // represents the highlight — mirroring the state used when editing a
+      // saved highlight.
+      if (!update) {
+        setEditingAnnotation(annotation);
+        view?.deselect();
+      }
     }
 
     const updatedConfig = updateBooknotes(bookKey, annotations);
