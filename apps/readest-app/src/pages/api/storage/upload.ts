@@ -6,7 +6,7 @@ import {
   validateUserAndToken,
   STORAGE_QUOTA_GRACE_BYTES,
 } from '@/utils/access';
-import { getDownloadSignedUrl, getUploadSignedUrl } from '@/utils/object';
+import { getDownloadSignedUrl, getUploadSignedUrl, isSafeObjectKeyName } from '@/utils/object';
 import { READEST_PUBLIC_STORAGE_BASE_URL } from '@/services/constants';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -22,12 +22,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { fileName, fileSize, bookHash, replicaKind, replicaId, temp = false } = req.body;
+
+  // Reject object-key path traversal before building any key. `fileName` is
+  // fully client-controlled and is interpolated into `${user.id}/${fileName}`;
+  // without this an attacker escapes their own prefix into another user's
+  // namespace (GHSA-mfmj-2frf-vhgw).
+  if (!isSafeObjectKeyName(fileName)) {
+    return res.status(400).json({ error: 'Invalid fileName' });
+  }
+
   if (temp) {
     try {
-      const datetime = new Date();
-      const timeStr = datetime.toISOString().replace(/[-:]/g, '').replace('T', '').slice(0, 10);
+      // The key carries no timestamp: `fileName` is content-addressed by the
+      // caller, so the same image always resolves to the same public URL. It
+      // used to embed the wall-clock hour, which handed Discord Rich Presence
+      // a brand-new external asset to fetch every hour — and every failed
+      // fetch dropped the cover back to the app icon (issue #5352). A stable
+      // URL lets Discord's media proxy reuse what it already resolved.
+      // Re-uploads overwrite in place, so bucket retention still applies.
       const userStr = user.id.slice(0, 8);
-      const fileKey = `temp/img/${timeStr}/${userStr}/${fileName}`;
+      const fileKey = `temp/img/${userStr}/${fileName}`;
       const bucketName = process.env['TEMP_STORAGE_PUBLIC_BUCKET_NAME'] || '';
       const uploadUrl = await getUploadSignedUrl(fileKey, fileSize, 1800, bucketName);
       const downloadUrl = await getDownloadSignedUrl(fileKey, 3 * 86400, bucketName);

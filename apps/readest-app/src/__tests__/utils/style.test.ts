@@ -181,6 +181,31 @@ describe('transformStylesheet', () => {
       const result = transformStylesheet(css, VW, VH, VERTICAL);
       expect(result).toContain('var(--monospace, monospace)');
     });
+
+    // Regression test for #5277: a stylesheet can be handed to this transform
+    // more than once. Rewriting the generic families again turned them into
+    // `var(--var(--serif, serif), serif)`, which the CSS parser drops - the
+    // book's font-family declarations vanished and the reader's own font
+    // showed through instead.
+    describe('idempotence', () => {
+      const cases = [
+        ['.text { font-family: serif; }', 'var(--serif, serif)'],
+        ['.text { font-family: sans-serif; }', 'var(--sans-serif, sans-serif)'],
+        ['.code { font-family: monospace; }', 'var(--monospace, monospace)'],
+        ['.text { font-family: "FZSongTi", serif; }', 'var(--serif, serif)'],
+        ['.text { font-family: Helvetica, sans-serif; }', 'var(--sans-serif, sans-serif)'],
+      ] as const;
+
+      cases.forEach(([css, expected]) => {
+        it(`keeps ${css} stable across repeated transforms`, () => {
+          const once = transformStylesheet(css, VW, VH, VERTICAL);
+          const twice = transformStylesheet(once, VW, VH, VERTICAL);
+          expect(once).toContain(expected);
+          expect(twice).toBe(once);
+          expect(twice).not.toContain('var(--var(');
+        });
+      });
+    });
   });
 
   describe('color black to var(--theme-fg-color)', () => {
@@ -311,6 +336,27 @@ describe('transformStylesheet', () => {
       const css = '.custom { display: flex; padding: 10px; margin: 5px; }';
       const result = transformStylesheet(css, VW, VH, VERTICAL);
       expect(result).toBe(css);
+    });
+  });
+
+  describe('dark mode light backgrounds', () => {
+    it('rewrites white backgrounds in EPUB CSS to theme bg', () => {
+      localStorage.setItem('themeMode', 'dark');
+      localStorage.setItem('themeColor', 'default');
+      localStorage.setItem('systemIsDarkMode', 'false');
+      const css = '.callout { background-color: #ffffff; padding: 1em; }';
+      const result = transformStylesheet(css, VW, VH, VERTICAL);
+      expect(result).toMatch(/background-color:\s*#[0-9a-f]{6}/i);
+      expect(result).not.toContain('background-color: #ffffff');
+      localStorage.removeItem('themeMode');
+    });
+
+    it('leaves dark backgrounds unchanged in dark mode', () => {
+      localStorage.setItem('themeMode', 'dark');
+      const css = '.panel { background-color: #222; }';
+      const result = transformStylesheet(css, VW, VH, VERTICAL);
+      expect(result).toContain('background-color: #222');
+      localStorage.removeItem('themeMode');
     });
   });
 });

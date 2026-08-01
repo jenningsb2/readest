@@ -60,9 +60,17 @@ vi.mock('@/services/opds/pseStream', () => ({
   openPseStreamBook: vi.fn(),
   parsePseStreamFileName: vi.fn(),
 }));
+vi.mock('@/services/rss/feedBookUrl', () => ({
+  isFeedBookUrl: () => false,
+  parseFeedBookUrl: vi.fn(),
+}));
+vi.mock('@/services/rss/feedReader', () => ({
+  openFeedBookDoc: vi.fn(),
+}));
 
 import { useReaderStore } from '@/store/readerStore';
 import { useBookDataStore } from '@/store/bookDataStore';
+import { uniqueId } from '@/utils/misc';
 
 /**
  * Helper to seed a minimal ViewState in the store for a given key.
@@ -79,9 +87,9 @@ function seedViewState(key: string, overrides: Record<string, unknown> = {}) {
         loading: false,
         inited: false,
         error: null,
-        progress: null,
         ribbonVisible: false,
         ttsEnabled: false,
+        autoScrollEnabled: false,
         syncing: false,
         gridInsets: null,
         previewMode: false,
@@ -319,6 +327,52 @@ describe('readerStore', () => {
 
       useReaderStore.getState().setViewInited('book-1', false);
       expect(useReaderStore.getState().viewStates['book-1']!.inited).toBe(false);
+    });
+  });
+
+  describe('recreateViewer', () => {
+    // Regression test for #5277: `initViewState` already mints a fresh
+    // viewerKey, so minting a second one here remounted <FoliateViewer> twice.
+    // The abandoned first mount kept opening the same bookDoc and left an extra
+    // `data` transform listener on its shared loader, so every stylesheet was
+    // transformed twice and the book's fonts were replaced by the app's.
+    test('mints a single viewerKey so the viewer mounts only once', async () => {
+      seedViewState('book-1', { viewerKey: 'book-1-uid-0' });
+
+      let counter = 0;
+      const uniqueIdMock = vi.mocked(uniqueId);
+      uniqueIdMock.mockImplementation(() => `uid-${++counter}`);
+
+      // Stand in for the real initViewState, which reloads the book and ends by
+      // assigning a fresh viewerKey of its own.
+      const initViewState = vi.fn(async (_envConfig: unknown, _id: string, key: string) => {
+        useReaderStore.setState((state) => ({
+          viewStates: {
+            ...state.viewStates,
+            [key]: { ...state.viewStates[key]!, viewerKey: `${key}-${uniqueId()}` },
+          },
+        }));
+      });
+      useReaderStore.setState({
+        initViewState: initViewState as unknown as ReturnType<
+          typeof useReaderStore.getState
+        >['initViewState'],
+      });
+
+      const mountedKeys: string[] = [];
+      const unsubscribe = useReaderStore.subscribe((state) => {
+        const viewerKey = state.viewStates['book-1']?.viewerKey;
+        if (viewerKey && mountedKeys.at(-1) !== viewerKey) mountedKeys.push(viewerKey);
+      });
+
+      useReaderStore.getState().recreateViewer({} as never, 'book-1');
+      await vi.waitFor(() => expect(initViewState).toHaveBeenCalled());
+      await Promise.resolve();
+      await Promise.resolve();
+      unsubscribe();
+
+      expect(mountedKeys).toEqual(['book-1-uid-1']);
+      uniqueIdMock.mockImplementation(() => 'mock-uid-123');
     });
   });
 });

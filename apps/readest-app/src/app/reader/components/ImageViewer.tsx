@@ -1,9 +1,13 @@
 import clsx from 'clsx';
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { IoChevronBack, IoChevronForward } from 'react-icons/io5';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useKeyDownActions } from '@/hooks/useKeyDownActions';
+import { useEnv } from '@/context/EnvContext';
 import { Insets } from '@/types/misc';
+import { eventDispatcher } from '@/utils/event';
+import { canShareText } from '@/utils/share';
+import { dataUrlToBytes, imageExtensionFromMime } from '@/utils/image';
 import ZoomControls from './ZoomControls';
 
 interface ImageViewerProps {
@@ -18,6 +22,9 @@ const MIN_SCALE = 0.5;
 const MAX_SCALE = 8;
 const ZOOM_STEP = 1.2;
 const WHEEL_SENSITIVITY = 0.001;
+// Double-click magnification used when 1:1 is not a zoom in (see
+// `doubleClickScale`), which is what double-click always did before.
+const FALLBACK_DOUBLE_CLICK_SCALE = 2;
 
 const ImageViewer: React.FC<ImageViewerProps> = ({
   src,
@@ -27,9 +34,23 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   gridInsets,
 }) => {
   const _ = useTranslation();
+  const { appService } = useEnv();
+  // On Android the button saves straight to the photo gallery (the share sheet
+  // can't save to a file there); elsewhere it shares where supported, else
+  // exports. The affordance reflects the actual action.
+  const saveToGallery = appService?.isAndroidApp ?? false;
+  const canShare = !saveToGallery && canShareText(appService);
   const [scale, setScale] = useState(1);
+  // `scale` is relative to the fit-to-screen size, which says nothing about how
+  // much of the image's own resolution is on screen: fitting a 1600px
+  // illustration into an 800-device-pixel box paints it at half its detail.
+  // `pixelPerfectScale` is the `scale` at which one image pixel covers exactly
+  // one device pixel, so the zoom badge can report true resolution instead of a
+  // fit-relative number that meant something different on every device (#5362).
+  const [pixelPerfectScale, setPixelPerfectScale] = useState<number | null>(null);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  const [isWheelZooming, setIsWheelZooming] = useState(false);
   const [showZoomLabel, setShowZoomLabel] = useState(true);
   const lastTouchDistance = useRef<number>(0);
   const dragStart = useRef({ x: 0, y: 0 });
@@ -37,9 +58,54 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const zoomLabelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wheelZoomEndTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Escape (desktop) and Android Back key → close the viewer.
   useKeyDownActions({ onCancel: onClose });
+
+  const measurePixelPerfectScale = useCallback(() => {
+    const img = imageRef.current;
+    // `offsetWidth` is the laid-out width, which ignores the zoom transform, so
+    // it stays the fit-to-screen size at any zoom level.
+    if (!img?.naturalWidth || !img.offsetWidth) return;
+    const dpr = window.devicePixelRatio || 1;
+    setPixelPerfectScale(img.naturalWidth / (img.offsetWidth * dpr));
+  }, []);
+
+  // A cached image can already be decoded before the load event would fire, and
+  // rotating the device or resizing the window changes the fit size.
+  useEffect(() => {
+    setPixelPerfectScale(null);
+    measurePixelPerfectScale();
+    window.addEventListener('resize', measurePixelPerfectScale);
+    return () => window.removeEventListener('resize', measurePixelPerfectScale);
+  }, [src, measurePixelPerfectScale]);
+
+  // Percentage of the image's own resolution: 100% means one image pixel per
+  // device pixel, so it reads the same on every device and matches what an
+  // external image viewer shows for the extracted file.
+  const zoomPercent = Math.round((scale / (pixelPerfectScale ?? 1)) * 100);
+  // A large illustration in a small window can need more than MAX_SCALE just to
+  // reach its own resolution; never cap zoom below 1:1.
+  const maxScale = pixelPerfectScale ? Math.max(MAX_SCALE, pixelPerfectScale * 2) : MAX_SCALE;
+  // Jump straight to 1:1, unless the image is small enough that fitting already
+  // oversamples it (`pixelPerfectScale` < 1), where 1:1 would zoom *out*.
+  const doubleClickScale =
+    pixelPerfectScale && pixelPerfectScale > 1 ? pixelPerfectScale : FALLBACK_DOUBLE_CLICK_SCALE;
+
+  // A macOS trackpad pinch arrives as a rapid stream of ctrl+wheel events.
+  // Flag the gesture as active so the transform transition is suppressed while
+  // it streams (see the transition note below), then clear it shortly after the
+  // last event since wheel has no explicit gesture-end.
+  const markWheelZooming = () => {
+    setIsWheelZooming(true);
+    if (wheelZoomEndTimeoutRef.current) {
+      clearTimeout(wheelZoomEndTimeoutRef.current);
+    }
+    wheelZoomEndTimeoutRef.current = setTimeout(() => {
+      setIsWheelZooming(false);
+    }, 200);
+  };
 
   const hideZoomLabelAfterDelay = () => {
     if (zoomLabelTimeoutRef.current) {
@@ -52,7 +118,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   };
 
   const handleZoomIn = () => {
-    const newScale = Math.min(scale * ZOOM_STEP, MAX_SCALE);
+    const newScale = Math.min(scale * ZOOM_STEP, maxScale);
     setScale(newScale);
     hideZoomLabelAfterDelay();
   };
@@ -144,6 +210,9 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       if (zoomLabelTimeoutRef.current) {
         clearTimeout(zoomLabelTimeoutRef.current);
       }
+      if (wheelZoomEndTimeoutRef.current) {
+        clearTimeout(wheelZoomEndTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -161,10 +230,12 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
+    markWheelZooming();
+
     const delta = e.deltaY;
     const newScale = Math.min(
       Math.max(scale * Math.exp(-delta * WHEEL_SENSITIVITY), MIN_SCALE),
-      MAX_SCALE,
+      maxScale,
     );
 
     if (newScale <= 1) {
@@ -196,23 +267,29 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     dragStart.current = { x: e.clientX - position.x, y: e.clientY - position.y };
   };
 
-  const handleImageMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging || scale <= 1) return;
-    e.preventDefault();
+  // Track the drag on `window` (not the moving <img>) so the pan keeps
+  // following the pointer even when it crosses the image boundary. Binding the
+  // move/up handlers to the image meant the cursor leaving the lagging image
+  // aborted and restarted the drag, which flickered on desktop (#4451). This
+  // mirrors the touch path, which tracks on the full-screen container.
+  useEffect(() => {
+    if (!isDragging) return;
 
-    wasDragging.current = true;
-    const newX = e.clientX - dragStart.current.x;
-    const newY = e.clientY - dragStart.current.y;
+    const handleMouseMove = (e: MouseEvent) => {
+      wasDragging.current = true;
+      setPosition({ x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y });
+    };
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
 
-    setPosition({ x: newX, y: newY });
-  };
-
-  const handleImageMouseUp = (e: React.MouseEvent) => {
-    if (isDragging) {
-      e.stopPropagation();
-    }
-    setIsDragging(false);
-  };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging]);
 
   const onTouchStart = (e: React.TouchEvent) => {
     const touches = e.touches;
@@ -273,7 +350,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       const distanceChange = currentDistance / lastTouchDistance.current;
 
       requestAnimationFrame(() => {
-        const newScale = Math.min(Math.max(scale * distanceChange, MIN_SCALE), MAX_SCALE);
+        const newScale = Math.min(Math.max(scale * distanceChange, MIN_SCALE), maxScale);
 
         if (newScale <= 1) {
           setPosition({ x: 0, y: 0 });
@@ -319,6 +396,55 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     hideZoomLabelAfterDelay();
   };
 
+  // Save the currently viewed image to the device. `appService.saveFile`
+  // routes to the native/web Share sheet where available and falls back to a
+  // save dialog / browser download otherwise.
+  const handleSaveImage = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    if (!src || !appService) return;
+    // Anchor the macOS / iPad share popover to the button rect (mirrors the
+    // annotation export flow); ignored on platforms that don't use it.
+    const rect = e.currentTarget.getBoundingClientRect();
+    const sharePosition = {
+      x: rect.left + rect.width / 2,
+      y: rect.top,
+      preferredEdge: 'bottom' as const,
+    };
+    try {
+      const { bytes, mimeType } = dataUrlToBytes(decodeURIComponent(src));
+      const filename = `image.${imageExtensionFromMime(mimeType)}`;
+      if (saveToGallery) {
+        const saved = await appService.saveImageToGallery(
+          filename,
+          bytes.buffer as ArrayBuffer,
+          mimeType,
+        );
+        eventDispatcher.dispatch('toast', {
+          type: saved ? 'info' : 'error',
+          message: saved ? _('Image saved to gallery') : _('Failed to save the image'),
+        });
+        return;
+      }
+      const saved = await appService.saveFile(filename, bytes.buffer as ArrayBuffer, {
+        share: true,
+        mimeType,
+        sharePosition,
+      });
+      // The Share sheet provides its own feedback; only confirm the export path.
+      if (!canShare) {
+        eventDispatcher.dispatch('toast', {
+          type: saved ? 'info' : 'error',
+          message: saved ? _('Image saved successfully') : _('Failed to save the image'),
+        });
+      }
+    } catch (error) {
+      console.error('Failed to save image:', error);
+      eventDispatcher.dispatch('toast', {
+        type: 'error',
+        message: _('Failed to save the image'),
+      });
+    }
+  };
+
   const onDoubleClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -329,7 +455,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     if (scale === 1) {
       const mouseX = e.clientX - rect.left - rect.width / 2;
       const mouseY = e.clientY - rect.top - rect.height / 2;
-      const newScale = 2;
+      const newScale = doubleClickScale;
 
       setPosition((prevPos) => {
         return getZoomedOffset(mouseX, mouseY, scale, newScale, prevPos);
@@ -367,12 +493,16 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   if (!src) return null;
 
   return (
+    // `no-context-menu` suppresses the WebView's native long-press image
+    // callout (via the `.no-context-menu img` rule). On Android it otherwise
+    // collides with the pinch/pan handlers below and freezes the app.
     <div
       ref={containerRef}
+      data-capture-blocking-overlay='true'
       tabIndex={-1}
       role='button'
       aria-label={_('Image viewer')}
-      className='fixed inset-0 z-50 flex items-center justify-center outline-none'
+      className='no-context-menu fixed inset-0 z-50 flex items-center justify-center outline-none'
       onKeyDown={handleKeyDown}
       onWheel={handleWheel}
       onTouchMove={onTouchMove}
@@ -382,7 +512,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       <div
         role='button'
         tabIndex={0}
-        className='not-eink:bg-black/50 eink:bg-base-100 not-eink:backdrop-blur-md absolute inset-0'
+        className='image-viewer-overlay not-eink:bg-black/50 eink:bg-base-100 not-eink:backdrop-blur-md absolute inset-0'
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             onClose();
@@ -391,7 +521,9 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       />
       <ZoomControls
         gridInsets={gridInsets}
+        canShare={canShare}
         onClose={onClose}
+        onSave={handleSaveImage}
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onReset={handleReset}
@@ -440,11 +572,9 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
           width={0}
           height={0}
           sizes='100vw'
+          onLoad={measurePixelPerfectScale}
           onClick={handleImageClick}
           onMouseDown={handleImageMouseDown}
-          onMouseMove={handleImageMouseMove}
-          onMouseUp={handleImageMouseUp}
-          onMouseLeave={handleImageMouseUp}
           onDoubleClick={onDoubleClick}
           style={{
             width: 'auto',
@@ -452,7 +582,16 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
             maxWidth: '100%',
             maxHeight: '100%',
             transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
-            transition: 'transform 0.05s ease-out',
+            // No transition during continuous gestures: the 0.05s ease made the
+            // image lag behind a moving pointer, which flickered on desktop
+            // (#4451). The same lag flickered a trackpad pinch (a rapid
+            // ctrl+wheel stream) on macOS (#4742). Keep the smoothing only for
+            // discrete zoom (buttons, double-click, keyboard).
+            transition: isDragging || isWheelZooming ? 'none' : 'transform 0.05s ease-out',
+            // Promote to a GPU layer so transform changes don't repaint the
+            // page (the `transform-gpu` class is overridden by this inline
+            // transform, so its hint is lost).
+            willChange: 'transform',
             cursor: cursorStyle,
           }}
         />
@@ -463,7 +602,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
           aria-label={_('Zoom level')}
           className='zoom-level-label eink-bordered not-eink:text-white not-eink:bg-black/50 pointer-events-none absolute left-1/2 top-12 -translate-x-1/2 rounded-full px-3 py-1 text-sm transition-opacity duration-300'
         >
-          {Math.round((scale * 100) / 5) * 5}%
+          {zoomPercent}%
         </div>
       )}
     </div>

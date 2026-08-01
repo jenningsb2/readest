@@ -30,6 +30,10 @@ vi.mock('@/services/opds/feedChecker', () => ({
   checkFeedForNewItems: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock('@/services/opds/sourceMap', () => ({
+  upsertOPDSSourceMapping: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('@/services/opds/subscriptionState', () => ({
   loadSubscriptionState: vi.fn().mockResolvedValue({
     catalogId: 'cat-1',
@@ -50,6 +54,7 @@ vi.mock('@/services/opds/subscriptionState', () => ({
 import { syncSubscribedCatalogs } from '@/services/opds/autoDownload';
 import { checkFeedForNewItems } from '@/services/opds/feedChecker';
 import { saveSubscriptionState, loadSubscriptionState } from '@/services/opds/subscriptionState';
+import { upsertOPDSSourceMapping } from '@/services/opds/sourceMap';
 import { downloadFile } from '@/libs/storage';
 
 const createMockAppService = () =>
@@ -126,6 +131,40 @@ describe('OPDS auto-download orchestrator', () => {
     const savedState = vi.mocked(saveSubscriptionState).mock.calls[0]![1] as OPDSSubscriptionState;
     expect(savedState.knownEntryIds).toContain('urn:shelf:1');
     expect(savedState.lastCheckedAt).toBeGreaterThan(0);
+    expect(upsertOPDSSourceMapping).toHaveBeenCalledWith(appService, {
+      catalogId: 'cat-1',
+      sourceUrl: 'https://shelf.example.com/dl/1.epub',
+      bookHash: 'abc123',
+    });
+  });
+
+  it('downloads with skipSslVerification like the manual download path', async () => {
+    // The manual OPDS download (page.tsx handleDownload) passes
+    // skipSslVerification as a workaround for self-signed/private-CA OPDS
+    // servers (#2871): the native download_file validates TLS with rustls,
+    // which ignores the OS trust store, while the feed fetch and auth probe
+    // go through the http plugin with acceptInvalidCerts. Without the same
+    // flag here, auto-download dies in the TLS handshake on servers where
+    // manual download works (#4988).
+    const catalogs: OPDSCatalog[] = [
+      { id: 'cat-1', name: 'Shelf', url: 'https://shelf.example.com/opds', autoDownload: true },
+    ];
+    vi.mocked(checkFeedForNewItems).mockResolvedValue([
+      {
+        entryId: 'urn:shelf:1',
+        title: 'Issue 1',
+        acquisitionHref: '/dl/1.epub',
+        mimeType: 'application/epub+zip',
+        baseURL: 'https://shelf.example.com/opds',
+      },
+    ]);
+
+    await syncSubscribedCatalogs(catalogs, appService, []);
+
+    expect(downloadFile).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(downloadFile).mock.calls[0]![0]).toMatchObject({
+      skipSslVerification: true,
+    });
   });
 
   it('handles import failure by adding to failedEntries', async () => {

@@ -32,7 +32,7 @@ vi.mock('@/libs/storage', () => ({
 }));
 
 import { BaseAppService } from '@/services/appService';
-import { buildBookLookupIndex } from '@/services/bookService';
+import { buildBookLookupIndex, refreshBookMetadata } from '@/services/bookService';
 
 // Concrete test subclass of BaseAppService with mocked fs
 class TestAppService extends BaseAppService {
@@ -67,6 +67,9 @@ class TestAppService extends BaseAppService {
     return [];
   }
   async saveFile() {
+    return false;
+  }
+  async saveImageToGallery() {
     return false;
   }
   async ask() {
@@ -153,6 +156,31 @@ describe('importBook metaHash deduplication', () => {
     expect(existingBook.metadata).toEqual(TEST_METADATA);
     // metaHash should be set
     expect(existingBook.metaHash).toBe(metaHash);
+  });
+
+  // Cross-device file-update convergence (issue #4544 §E): re-importing an
+  // edited file re-keys the hash and clears uploadedAt so the new bytes get
+  // re-uploaded; the old entry is soft-deleted. Peers then pull the deleted
+  // old-hash row (remove old) + the uploaded new-hash row (download new).
+  it('clears uploadedAt on a metaHash re-import so the new file re-uploads', async () => {
+    const metaHash = getMetadataHash(TEST_METADATA);
+    const existingBook = makeBook({
+      hash: 'old-hash-123',
+      metaHash,
+      uploadedAt: Date.now() - 5000,
+    });
+    const books: Book[] = [existingBook];
+
+    mockPartialMD5.mockResolvedValue('new-hash-456');
+    setupMockBookDoc();
+
+    const mockFile = new File(['new content'], 'test.epub', { type: 'application/epub+zip' });
+    const result = await service.importBook(mockFile, books);
+
+    expect(result).toBe(existingBook);
+    expect(existingBook.hash).toBe('new-hash-456');
+    // uploadedAt cleared → book sync / manual upload re-pushes the new file.
+    expect(existingBook.uploadedAt).toBeNull();
   });
 
   it('should not match metaHash for deleted books', async () => {
@@ -595,6 +623,106 @@ describe('importBook metaHash aggregation', () => {
   });
 });
 
+// PDF metadata is often generic (e.g. every PowerPoint export is titled
+// "PowerPoint Presentation" with the same author), so metaHash alone wrongly
+// collapses distinct PDFs into one book (issue #5411). PDF metaHash is salted
+// with the original filename so only same-named files dedupe.
+describe('importBook PDF filename-aware dedup', () => {
+  let service: TestAppService;
+
+  const PDF_METADATA = {
+    title: 'PowerPoint Presentation',
+    author: 'Alice Author',
+    language: 'en',
+  };
+
+  function setupMockPdfDoc() {
+    const bookDoc = {
+      metadata: { ...PDF_METADATA },
+      getCover: vi.fn().mockResolvedValue(null),
+    };
+    mockOpen.mockResolvedValue({ book: bookDoc, format: 'PDF' });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    service = new TestAppService();
+    const fs = service.getFs();
+    fs.exists.mockResolvedValue(false);
+    fs.createDir.mockResolvedValue(undefined);
+    fs.writeFile.mockResolvedValue(undefined);
+    fs.removeDir.mockResolvedValue(undefined);
+    fs.readFile.mockResolvedValue('{}');
+  });
+
+  it('imports PDFs with identical metadata but different filenames as separate books', async () => {
+    const books: Book[] = [];
+
+    mockPartialMD5.mockResolvedValue('pdf-hash-1');
+    setupMockPdfDoc();
+    const book1 = await service.importBook(
+      new File(['slides 1'], 'lecture-01.pdf', { type: 'application/pdf' }),
+      books,
+    );
+
+    mockPartialMD5.mockResolvedValue('pdf-hash-2');
+    setupMockPdfDoc();
+    const book2 = await service.importBook(
+      new File(['slides 2'], 'lecture-02.pdf', { type: 'application/pdf' }),
+      books,
+    );
+
+    expect(book2).not.toBe(book1);
+    expect(books.filter((b) => !b.deletedAt)).toHaveLength(2);
+  });
+
+  it('still dedupes a PDF re-imported with the same filename and metadata', async () => {
+    const books: Book[] = [];
+
+    mockPartialMD5.mockResolvedValue('pdf-hash-1');
+    setupMockPdfDoc();
+    const book1 = await service.importBook(
+      new File(['v1'], 'deck.pdf', { type: 'application/pdf' }),
+      books,
+    );
+
+    mockPartialMD5.mockResolvedValue('pdf-hash-2');
+    setupMockPdfDoc();
+    const book2 = await service.importBook(
+      new File(['v2'], 'deck.pdf', { type: 'application/pdf' }),
+      books,
+    );
+
+    expect(book2).toBe(book1);
+    expect(books.filter((b) => !b.deletedAt)).toHaveLength(1);
+    expect(book1!.hash).toBe('pdf-hash-2');
+  });
+
+  it('refreshBookMetadata preserves the salted metaHash for PDFs', async () => {
+    // The original filename is lost after import (files are stored under the
+    // metadata title), so re-parsing the file cannot reproduce the salt and
+    // must keep the metaHash stamped at import time.
+    const book = makeBook({
+      hash: 'pdf-hash-1',
+      format: 'PDF' as Book['format'],
+      metaHash: 'salted-import-hash',
+    });
+
+    const fs = service.getFs();
+    fs.exists.mockResolvedValue(true);
+    fs.openFile.mockResolvedValue(new File(['pdf'], 'Test Book.pdf'));
+    setupMockPdfDoc();
+
+    const refreshed = await refreshBookMetadata(
+      fs as unknown as Parameters<typeof refreshBookMetadata>[0],
+      book,
+    );
+
+    expect(refreshed).toBe(true);
+    expect(book.metaHash).toBe('salted-import-hash');
+  });
+});
+
 describe('importBook with BookLookupIndex', () => {
   let service: TestAppService;
 
@@ -647,5 +775,24 @@ describe('importBook with BookLookupIndex', () => {
 
     // Should reuse the existing book object via lookup index
     expect(result).toBe(existingBook);
+  });
+
+  it('buildBookLookupIndex skips deleted and url-backed books in byFilePath', async () => {
+    const inPlaceBook = makeBook({
+      hash: 'a',
+      filePath: '/lib/a.epub',
+    });
+    const deletedBook = makeBook({
+      hash: 'b',
+      filePath: '/lib/b.epub',
+      deletedAt: Date.now(),
+    });
+    const urlBook = makeBook({ hash: 'c', filePath: 'https://example.com/c.epub' });
+
+    const lookupIndex = buildBookLookupIndex([inPlaceBook, deletedBook, urlBook], 'linux');
+
+    expect(lookupIndex.byFilePath.get('/lib/a.epub')).toBe(inPlaceBook);
+    expect(lookupIndex.byFilePath.has('/lib/b.epub')).toBe(false);
+    expect(lookupIndex.byFilePath.has('https://example.com/c.epub')).toBe(false);
   });
 });

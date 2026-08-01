@@ -4,8 +4,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('foliate-js/opds.js', () => ({
   isOPDSCatalog: vi.fn((type: string) => {
     return (
-      type.includes('application/atom+xml') &&
-      (type.includes('opds-catalog') || type.includes('opds'))
+      type.includes('application/opds+json') ||
+      (type.includes('application/atom+xml') &&
+        (type.includes('opds-catalog') || type.includes('opds')))
     );
   }),
 }));
@@ -47,12 +48,19 @@ import {
   groupByArray,
   parseMediaType,
   isSearchLink,
+  expandOPDSSearchTemplate,
   resolveURL,
   getFileExtFromPath,
+  getSafeDOMParserMimeType,
+  looksLikeXMLContent,
+  parseOPDSXML,
   MIME,
   validateOPDSURL,
+  getOPDSNavLink,
+  getUnaddedPopularCatalogs,
+  formatContributorName,
 } from '@/app/opds/utils/opdsUtils';
-import type { OPDSBaseLink } from '@/types/opds';
+import type { OPDSBaseLink, OPDSCatalog } from '@/types/opds';
 import { fetchWithAuth } from '@/app/opds/utils/opdsReq';
 
 const mockFetchWithAuth = vi.mocked(fetchWithAuth);
@@ -60,6 +68,18 @@ const mockFetchWithAuth = vi.mocked(fetchWithAuth);
 describe('opdsUtils', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  describe('formatContributorName', () => {
+    // Calibre stores commas in author names as `|` (e.g. `Doe| John`), and
+    // Calibre-Web OPDS feeds serve that raw form (readest issue #5183).
+    it('restores commas that Calibre escaped as pipes', () => {
+      expect(formatContributorName('Doe| John Walter')).toBe('Doe, John Walter');
+    });
+
+    it('leaves names without pipes unchanged', () => {
+      expect(formatContributorName('John Walter Doe')).toBe('John Walter Doe');
+    });
   });
 
   describe('groupByArray', () => {
@@ -239,6 +259,25 @@ describe('opdsUtils', () => {
       expect(isSearchLink(link)).toBe(false);
     });
 
+    it('should return true for a templated OPDS 2.0 JSON search link', () => {
+      const link: OPDSBaseLink = {
+        rel: 'search',
+        href: '/opds/search{?query}',
+        type: MIME.OPDS2,
+        templated: true,
+      };
+      expect(isSearchLink(link)).toBe(true);
+    });
+
+    it('should return false for an OPDS 2.0 JSON search link that is not templated', () => {
+      const link: OPDSBaseLink = {
+        rel: 'search',
+        href: '/opds/search',
+        type: MIME.OPDS2,
+      };
+      expect(isSearchLink(link)).toBe(false);
+    });
+
     it('should return false when rel is undefined', () => {
       const link: OPDSBaseLink = {
         href: '/search',
@@ -254,6 +293,38 @@ describe('opdsUtils', () => {
         type: MIME.ATOM,
       };
       expect(isSearchLink(link)).toBe(false);
+    });
+  });
+
+  describe('expandOPDSSearchTemplate', () => {
+    it('expands a {?query} template with the search term', () => {
+      expect(expandOPDSSearchTemplate('/opds/search{?query}', 'dune')).toBe(
+        '/opds/search?query=dune',
+      );
+    });
+
+    it('percent-encodes the search term', () => {
+      expect(expandOPDSSearchTemplate('/opds/search{?query}', 'harry potter')).toBe(
+        '/opds/search?query=harry%20potter',
+      );
+    });
+
+    it('fills a {?searchTerms} template variable', () => {
+      expect(expandOPDSSearchTemplate('/search{?searchTerms}', 'foo')).toBe(
+        '/search?searchTerms=foo',
+      );
+    });
+
+    it('fills only the primary text variable, omitting the rest', () => {
+      expect(expandOPDSSearchTemplate('/search{?query,lang}', 'foo')).toBe('/search?query=foo');
+    });
+
+    it('falls back to the only variable when none is a known query name', () => {
+      expect(expandOPDSSearchTemplate('/search{?keyword}', 'foo')).toBe('/search?keyword=foo');
+    });
+
+    it('returns the href unchanged when there are no template variables', () => {
+      expect(expandOPDSSearchTemplate('/search', 'foo')).toBe('/search');
     });
   });
 
@@ -304,6 +375,36 @@ describe('opdsUtils', () => {
       // The function strips search params for non-scheme relativeTo
       expect(result).not.toContain('page=2');
     });
+
+    // bookserver.mek.oszk.hu (readest issue #5300) serves its catalog over HTTPS
+    // but publishes absolute `http://` links to itself; its plain-HTTP vhost
+    // 301-redirects to an unrelated host that 404s, so every sub-feed failed.
+    it('should keep same-host links on https when the feed was fetched over https', () => {
+      const result = resolveURL(
+        'http://bookserver.mek.oszk.hu/abcrend.atom',
+        'https://bookserver.mek.oszk.hu/',
+      );
+      expect(result).toBe('https://bookserver.mek.oszk.hu/abcrend.atom');
+    });
+
+    it('should upgrade same-host links behind the proxy base too', () => {
+      const proxyBase = '/api/opds/proxy?url=https%3A%2F%2Fexample.com%2Fopds';
+      expect(resolveURL('http://example.com/feed/new', proxyBase)).toBe(
+        'https://example.com/feed/new',
+      );
+    });
+
+    it('should leave cross-host http links untouched', () => {
+      expect(resolveURL('http://other.com/feed', 'https://example.com/opds')).toBe(
+        'http://other.com/feed',
+      );
+    });
+
+    it('should not upgrade when the feed itself was fetched over http', () => {
+      expect(resolveURL('http://example.com/feed', 'http://example.com/opds')).toBe(
+        'http://example.com/feed',
+      );
+    });
   });
 
   describe('getFileExtFromPath', () => {
@@ -351,6 +452,115 @@ describe('opdsUtils', () => {
       // If both epub and pdf appear, returns whichever EXTS entry matches first
       const result = getFileExtFromPath('/books/epub/pdf/file');
       expect(['epub', 'pdf']).toContain(result);
+    });
+  });
+
+  describe('looksLikeXMLContent', () => {
+    it('detects XML that starts with the root element directly', () => {
+      expect(looksLikeXMLContent('<feed xmlns="http://www.w3.org/2005/Atom"></feed>')).toBe(true);
+    });
+
+    it('detects XML with an <?xml ?> declaration', () => {
+      expect(looksLikeXMLContent('<?xml version="1.0"?><feed></feed>')).toBe(true);
+    });
+
+    // Regression for https://github.com/readest/readest/issues/4181
+    // The Hungarian MEK catalog returns XML feeds with leading whitespace and
+    // newlines before <feed> (and no <?xml ?> declaration). A naive
+    // text.startsWith('<') check misfired, sending the body to JSON.parse.
+    it('detects XML with leading whitespace and newlines', () => {
+      expect(looksLikeXMLContent('  \n  <feed xmlns="http://www.w3.org/2005/Atom"></feed>')).toBe(
+        true,
+      );
+    });
+
+    it('detects XML with a leading UTF-8 BOM', () => {
+      expect(looksLikeXMLContent('﻿<feed></feed>')).toBe(true);
+    });
+
+    it('returns false for JSON content', () => {
+      expect(looksLikeXMLContent('{"metadata":{}}')).toBe(false);
+    });
+
+    it('returns false for JSON with leading whitespace', () => {
+      expect(looksLikeXMLContent('  \n  {"metadata":{}}')).toBe(false);
+    });
+
+    it('returns false for plain text', () => {
+      expect(looksLikeXMLContent('Just some plain text')).toBe(false);
+    });
+
+    it('returns false for an empty string', () => {
+      expect(looksLikeXMLContent('')).toBe(false);
+    });
+  });
+
+  describe('getSafeDOMParserMimeType', () => {
+    it('maps XML-like MIME types to application/xml', () => {
+      expect(getSafeDOMParserMimeType('application/atom+xml')).toBe('application/xml');
+      expect(getSafeDOMParserMimeType('application/atom+xml;profile=opds-catalog')).toBe(
+        'application/xml',
+      );
+    });
+
+    it('leaves HTML MIME types unchanged', () => {
+      expect(getSafeDOMParserMimeType('text/html')).toBe('text/html');
+    });
+  });
+
+  // Regression for https://github.com/readest/readest/issues/4479
+  // The Hungarian MEK catalog (a PHP backend) emits a valid Atom feed followed
+  // by trailing junk after </feed>. Firefox's strict DOMParser replaces the
+  // whole document with a <parsererror> ("junk after document element"), while
+  // Chrome ignores it. jsdom matches Firefox, so these run in the test env.
+  describe('parseOPDSXML', () => {
+    const parserError = (doc: Document) =>
+      doc.documentElement?.localName === 'parsererror' ||
+      doc.getElementsByTagName('parsererror').length > 0;
+
+    it('parses a well-formed feed unchanged', () => {
+      const doc = parseOPDSXML('<feed xmlns="http://www.w3.org/2005/Atom"><title>x</title></feed>');
+      expect(parserError(doc)).toBe(false);
+      expect(doc.documentElement.localName).toBe('feed');
+    });
+
+    it('recovers from text junk after the root element', () => {
+      const doc = parseOPDSXML(
+        '<feed xmlns="http://www.w3.org/2005/Atom"><title>x</title></feed>\nWarning: junk',
+      );
+      expect(parserError(doc)).toBe(false);
+      expect(doc.documentElement.localName).toBe('feed');
+      expect(doc.querySelector('title')?.textContent).toBe('x');
+    });
+
+    it('recovers from a stray tag after the root element', () => {
+      const doc = parseOPDSXML(
+        '<feed xmlns="http://www.w3.org/2005/Atom"><title>x</title></feed><br/>',
+      );
+      expect(parserError(doc)).toBe(false);
+      expect(doc.documentElement.localName).toBe('feed');
+    });
+
+    it('recovers from leading whitespace and trailing junk (the MEK shape)', () => {
+      const doc = parseOPDSXML(
+        '\n\n\n<feed xmlns="http://www.w3.org/2005/Atom"><title>MEK</title></feed>\n<br />extra',
+      );
+      expect(parserError(doc)).toBe(false);
+      expect(doc.documentElement.localName).toBe('feed');
+    });
+
+    it('recovers an entry document with trailing junk', () => {
+      const doc = parseOPDSXML(
+        '<entry xmlns="http://www.w3.org/2005/Atom"><title>book</title></entry> junk',
+      );
+      expect(parserError(doc)).toBe(false);
+      expect(doc.documentElement.localName).toBe('entry');
+    });
+
+    it('returns the error document when recovery is impossible', () => {
+      // Unclosed root element — there is no trailing junk to strip.
+      const doc = parseOPDSXML('<feed xmlns="http://www.w3.org/2005/Atom"><title>x</title>');
+      expect(parserError(doc)).toBe(true);
     });
   });
 
@@ -522,6 +732,38 @@ describe('opdsUtils', () => {
       expect(result.isValid).toBe(true);
     });
 
+    // Regression for https://github.com/readest/readest/issues/4181
+    it('should accept an XML feed with leading whitespace and a text/html Content-Type', async () => {
+      const xmlFeed = `  \n<feed xmlns="http://www.w3.org/2005/Atom">\n  <title>MEK</title>\n</feed>`;
+
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        url: 'https://bookserver.mek.oszk.hu/all/epub/0',
+        text: () => Promise.resolve(xmlFeed),
+        headers: new Headers({ 'Content-Type': 'text/html' }),
+      } as Response);
+
+      const result = await validateOPDSURL('https://bookserver.mek.oszk.hu/all/epub/0');
+      expect(result.isValid).toBe(true);
+      expect(result.data?.type).toBe('feed');
+    });
+
+    // Regression for https://github.com/readest/readest/issues/4479
+    it('should accept a feed with trailing junk after </feed> (Firefox strict parse)', async () => {
+      const xmlFeed = `\n\n<feed xmlns="http://www.w3.org/2005/Atom">\n  <title>MEK</title>\n</feed>\nWarning: stray PHP output`;
+
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        url: 'https://bookserver.mek.oszk.hu/abc/teljes/C/0',
+        text: () => Promise.resolve(xmlFeed),
+        headers: new Headers({ 'Content-Type': 'text/html' }),
+      } as Response);
+
+      const result = await validateOPDSURL('https://bookserver.mek.oszk.hu/abc/teljes/C/0');
+      expect(result.isValid).toBe(true);
+      expect(result.data?.type).toBe('feed');
+    });
+
     it('should return invalid for XML that is not a recognized OPDS document type', async () => {
       const xmlDoc = `<?xml version="1.0" encoding="UTF-8"?>
 <catalog>
@@ -563,6 +805,78 @@ describe('opdsUtils', () => {
         expect.objectContaining({ signal: expect.anything() }),
         customHeaders,
       );
+    });
+  });
+
+  describe('getOPDSNavLink', () => {
+    it('returns the href of the first OPDS-typed link', () => {
+      expect(
+        getOPDSNavLink([{ href: '/opds/subjects?id=164', type: 'application/opds+json' }]),
+      ).toBe('/opds/subjects?id=164');
+    });
+
+    it('skips links whose type is not an OPDS catalog type', () => {
+      expect(
+        getOPDSNavLink([{ href: 'https://example.com/author', type: 'text/html' }]),
+      ).toBeUndefined();
+    });
+
+    it('returns the first OPDS link when mixed with non-OPDS links', () => {
+      expect(
+        getOPDSNavLink([
+          { href: 'https://example.com/author', type: 'text/html' },
+          { href: '/opds/search?author_id=52836', type: 'application/opds+json' },
+        ]),
+      ).toBe('/opds/search?author_id=52836');
+    });
+
+    it('returns undefined for an empty or missing array', () => {
+      expect(getOPDSNavLink([])).toBeUndefined();
+      expect(getOPDSNavLink(undefined)).toBeUndefined();
+    });
+
+    it('ignores entries without an href', () => {
+      expect(getOPDSNavLink([{ type: 'application/opds+json' }])).toBeUndefined();
+    });
+  });
+
+  describe('getUnaddedPopularCatalogs', () => {
+    const popular: OPDSCatalog[] = [
+      { id: 'gutenberg', name: 'Project Gutenberg', url: 'https://m.gutenberg.org/ebooks.opds/' },
+      {
+        id: 'standardebooks',
+        name: 'Standard Ebooks',
+        url: 'https://standardebooks.org/feeds/opds',
+      },
+    ];
+
+    it('returns all popular catalogs when none are added', () => {
+      expect(getUnaddedPopularCatalogs(popular, [])).toEqual(popular);
+    });
+
+    it('drops a popular catalog already present in the added list', () => {
+      const added: OPDSCatalog[] = [
+        { id: '1', name: 'Project Gutenberg', url: 'https://m.gutenberg.org/ebooks.opds/' },
+      ];
+      const result = getUnaddedPopularCatalogs(popular, added);
+      expect(result.map((c) => c.id)).toEqual(['standardebooks']);
+    });
+
+    it('matches by normalized URL (case and surrounding whitespace)', () => {
+      const added: OPDSCatalog[] = [
+        { id: '1', name: 'Gutenberg', url: '  HTTPS://M.GUTENBERG.ORG/EBOOKS.OPDS/  ' },
+      ];
+      const result = getUnaddedPopularCatalogs(popular, added);
+      expect(result.map((c) => c.id)).toEqual(['standardebooks']);
+    });
+
+    it('excludes disabled popular catalogs', () => {
+      const withDisabled: OPDSCatalog[] = [
+        ...popular,
+        { id: 'manybooks', name: 'ManyBooks', url: 'https://manybooks.net/opds/', disabled: true },
+      ];
+      const result = getUnaddedPopularCatalogs(withDisabled, []);
+      expect(result.map((c) => c.id)).toEqual(['gutenberg', 'standardebooks']);
     });
   });
 });

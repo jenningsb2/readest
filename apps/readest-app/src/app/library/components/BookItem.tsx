@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { useEffect, useState } from 'react';
 import { MdCheckCircle, MdCheckCircleOutline } from 'react-icons/md';
 import {
   LiaCloudUploadAltSolid,
@@ -15,7 +16,9 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
 import { LibraryCoverFitType, LibraryViewModeType } from '@/types/settings';
 import { navigateToLogin } from '@/utils/nav';
-import { formatAuthors, formatDescription } from '@/utils/book';
+import { isReadestCloudStorageActive } from '@/services/sync/cloudSyncProvider';
+import { isFeedBook } from '@/services/rss/feedBookUrl';
+import { formatAuthors, formatDescription, formatSeries } from '@/utils/book';
 import ReadingProgress from './ReadingProgress';
 import BookCover from '@/components/BookCover';
 
@@ -29,6 +32,7 @@ interface BookItemProps {
   handleBookUpload: (book: Book) => void;
   handleBookDownload: (book: Book, options?: { redownload?: boolean; queued?: boolean }) => void;
   showBookDetailsModal: (book: Book) => void;
+  showTimeRemaining: boolean;
 }
 
 const BookItem: React.FC<BookItemProps> = ({
@@ -41,6 +45,7 @@ const BookItem: React.FC<BookItemProps> = ({
   handleBookUpload,
   handleBookDownload,
   showBookDetailsModal,
+  showTimeRemaining,
 }) => {
   const _ = useTranslation();
   const router = useRouter();
@@ -49,13 +54,30 @@ const BookItem: React.FC<BookItemProps> = ({
   const { settings } = useSettingsStore();
   const iconSize15 = useResponsiveSize(15);
 
+  const [coverAspect, setCoverAspect] = useState<number | null>(null);
+  useEffect(() => {
+    setCoverAspect(null);
+  }, [book.hash, book.metadata?.coverImageUrl, book.coverImageUrl]);
+
+  const CELL_ASPECT_RATIO = 28 / 41;
+  const fitCoverInGrid = mode === 'grid' && coverFit === 'fit' && coverAspect !== null;
+  const shouldShrinkWidth = fitCoverInGrid && coverAspect! < CELL_ASPECT_RATIO;
+  const bookitemMainStyle = fitCoverInGrid
+    ? {
+        aspectRatio: coverAspect!,
+        ...(shouldShrinkWidth ? { width: `${(coverAspect! / CELL_ASPECT_RATIO) * 100}%` } : {}),
+      }
+    : undefined;
+
+  const seriesText = formatSeries(book.metadata?.series, book.metadata?.seriesIndex);
+
   return (
     <div
       role='none'
       className={clsx(
         'book-item flex',
         mode === 'grid' && 'h-full flex-col justify-end',
-        mode === 'list' && 'h-28 flex-row gap-4 overflow-hidden',
+        mode === 'list' && 'min-h-28 flex-row gap-4 overflow-hidden',
         mode === 'list' ? 'library-list-item' : 'library-grid-item',
         appService?.hasContextMenu ? 'cursor-pointer' : '',
       )}
@@ -63,18 +85,24 @@ const BookItem: React.FC<BookItemProps> = ({
     >
       <div
         className={clsx(
-          'bookitem-main relative flex aspect-[28/41] justify-center overflow-hidden rounded',
+          'bookitem-main relative flex justify-center overflow-hidden rounded',
+          !fitCoverInGrid && 'aspect-[28/41]',
           coverFit === 'crop' && 'shadow-md',
           mode === 'grid' && 'items-end',
           mode === 'list' && 'min-w-20 items-center',
         )}
+        style={bookitemMainStyle}
       >
         <BookCover
           mode={mode}
           book={book}
           coverFit={coverFit}
-          showSpine={false}
-          imageClassName='rounded shadow-md'
+          showSpine={settings.librarySkeuomorphicCovers}
+          imageClassName={clsx(
+            'shadow-md',
+            settings.librarySkeuomorphicCovers ? 'rounded-none' : 'rounded',
+          )}
+          onAspectRatioChange={setCoverAspect}
         />
         {bookSelected && (
           <div className='absolute inset-0 bg-black opacity-30 transition-opacity duration-300'></div>
@@ -93,15 +121,15 @@ const BookItem: React.FC<BookItemProps> = ({
         className={clsx(
           'flex w-full flex-col p-0',
           mode === 'grid' && 'pt-2',
-          mode === 'list' && 'gap-2 py-0',
+          mode === 'list' && 'gap-1 py-0',
         )}
       >
-        <div className={clsx('min-w-0 flex-1', mode === 'list' && 'flex flex-col gap-2')}>
+        <div className={clsx('min-w-0 flex-1', mode === 'list' && 'flex flex-col gap-1')}>
           <h4
             className={clsx(
               'overflow-hidden text-ellipsis font-semibold',
               mode === 'grid' && 'block whitespace-nowrap text-[0.6em] text-xs',
-              mode === 'list' && 'line-clamp-2 text-base',
+              mode === 'list' && 'line-clamp-1 text-base',
             )}
           >
             {book.title}
@@ -112,6 +140,9 @@ const BookItem: React.FC<BookItemProps> = ({
             </p>
           )}
         </div>
+        {mode === 'list' && seriesText && (
+          <p className='text-neutral-content line-clamp-1 text-sm'>{seriesText}</p>
+        )}
         {mode === 'list' && (
           <h4 className='text-neutral-content line-clamp-1 text-sm'>
             {formatDescription(book.metadata?.description)}
@@ -127,8 +158,10 @@ const BookItem: React.FC<BookItemProps> = ({
             minHeight: `${iconSize15}px`,
           }}
         >
-          {(book.progress || book.readingStatus) && <ReadingProgress book={book} />}
-          <div className='flex items-center justify-center gap-x-2'>
+          {(book.progress || book.readingStatus) && (
+            <ReadingProgress book={book} showTimeRemaining={showTimeRemaining} />
+          )}
+          <div className='flex shrink-0 items-center justify-center gap-x-2'>
             {!appService?.isMobile && (
               <button
                 aria-label={_('Show Book Details')}
@@ -158,6 +191,9 @@ const BookItem: React.FC<BookItemProps> = ({
                 ></div>
               )
             ) : (
+              // A feed book has no file to move either way, so it never gets a
+              // cloud badge — it would only queue a transfer that fails (#5307).
+              !isFeedBook(book) &&
               (!book.uploadedAt || (book.uploadedAt && !book.downloadedAt)) && (
                 <button
                   aria-label={!book.uploadedAt ? _('Upload Book') : _('Download Book')}
@@ -175,7 +211,7 @@ const BookItem: React.FC<BookItemProps> = ({
                     }
                   }}
                 >
-                  {!book.uploadedAt && settings.autoUpload && (
+                  {!book.uploadedAt && isReadestCloudStorageActive(settings) && (
                     <LiaCloudUploadAltSolid size={iconSize15} />
                   )}
                   {book.uploadedAt && !book.downloadedAt && (

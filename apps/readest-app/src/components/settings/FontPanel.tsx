@@ -25,12 +25,14 @@ import { getSysFontsList } from '@/utils/bridge';
 import { isCJKStr } from '@/utils/lang';
 import { isTauriAppPlatform } from '@/services/environment';
 import { useResetViewSettings } from '@/hooks/useResetSettings';
+import { useKeyDownActions } from '@/hooks/useKeyDownActions';
 import { saveViewSettings } from '@/helpers/settings';
 import { SettingsPanelPanelProp } from './SettingsDialog';
 import { BoxedList, NavigationRow, SettingLabel, SettingsRow } from './primitives';
 import NumberInput from './NumberInput';
 import FontDropdown from './FontDropDown';
 import CustomFonts from './CustomFonts';
+import { Toggle } from '../primitives/toggle';
 
 const genCJKFontsList = (sysFonts: string[]) => {
   return Array.from(new Set([...sysFonts, ...CJK_SERIF_FONTS, ...CJK_SANS_SERIF_FONTS]))
@@ -171,6 +173,19 @@ const FontPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset 
     setFontPanelView('main-fonts');
   };
 
+  // Android Back / Esc: when the Custom Fonts sub-page is open, intercept
+  // and step back to main-fonts instead of letting <Dialog>'s own listener
+  // close the entire Settings dialog. This works because
+  // `useKeyDownActions` registers its sync `native-key-down` listener
+  // *after* <Dialog>'s, and `dispatchSync` walks listeners LIFO — so when
+  // enabled this hook claims the Back press first and `return true`
+  // consumes it; when disabled (sub-page closed) Back falls through to
+  // <Dialog> and closes the dialog as before.
+  useKeyDownActions({
+    enabled: fontPanelView === 'custom-fonts',
+    onCancel: handleBackToMain,
+  });
+
   useEffect(() => {
     onRegisterReset(handleReset);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -292,12 +307,7 @@ const FontPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset 
         className='flex cursor-pointer items-center justify-between px-4'
       >
         <SettingLabel>{_('Override Book Font')}</SettingLabel>
-        <input
-          type='checkbox'
-          className='toggle'
-          checked={overrideFont}
-          onChange={() => setOverrideFont(!overrideFont)}
-        />
+        <Toggle checked={overrideFont} onChange={() => setOverrideFont(!overrideFont)} />
       </label>
 
       <BoxedList title={_('Font Size')}>

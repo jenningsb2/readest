@@ -8,6 +8,7 @@ import { useSidebarStore } from '@/store/sidebarStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { eventDispatcher } from '@/utils/event';
 import { getBookDirFromLanguage } from '@/utils/book';
+import { getPanelTopInset } from '@/utils/insets';
 import { useEnv } from '@/context/EnvContext';
 import { useSwipeToDismiss } from '@/hooks/useSwipeToDismiss';
 import { usePanelResize } from '@/hooks/usePanelResize';
@@ -31,11 +32,11 @@ const SideBar = ({}) => {
   const { updateAppTheme, safeAreaInsets, systemUIVisible, statusBarHeight } = useThemeStore();
   const { sideBarBookKey, setSideBarBookKey, getSearchNavState, setSearchTerm, clearSearch } =
     useSidebarStore();
+  const { isSearchBarVisible, setSearchBarVisible } = useSidebarStore();
   const searchNavState = sideBarBookKey ? getSearchNavState(sideBarBookKey) : null;
   const { searchTerm = '', searchResults = null } = searchNavState || {};
   const { getBookData } = useBookDataStore();
   const { getView, getViewSettings } = useReaderStore();
-  const [isSearchBarVisible, setIsSearchBarVisible] = useState(false);
   const searchTermRef = useRef(searchTerm);
   const isMobile = window.innerWidth < 640;
   const [isFullHeightInMobile, setIsFullHeightInMobile] = useState(isMobile);
@@ -56,7 +57,7 @@ const SideBar = ({}) => {
     const { term, bookKey } = event.detail;
     setSideBarVisible(true);
     setSideBarBookKey(bookKey);
-    setIsSearchBarVisible(true);
+    setSearchBarVisible(true);
     if (term !== undefined && term !== null) {
       setSearchTerm(bookKey, term);
     }
@@ -121,22 +122,23 @@ const SideBar = ({}) => {
   };
 
   const handleToggleSearchBar = () => {
-    setIsSearchBarVisible((prev) => {
-      if (prev) handleHideSearchBar();
-      return !prev;
-    });
+    if (isSearchBarVisible) {
+      handleHideSearchBar();
+    } else {
+      setSearchBarVisible(true);
+    }
   };
 
   const handleShowSearchBar = useCallback(() => {
     setTimeout(() => {
       setSideBarVisible(true);
-      setIsSearchBarVisible(true);
+      setSearchBarVisible(true);
     }, 100);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleHideSearchBar = useCallback(() => {
-    setIsSearchBarVisible(false);
+    setSearchBarVisible(false);
     setTimeout(() => {
       if (sideBarBookKey) clearSearch(sideBarBookKey);
     }, 100);
@@ -197,11 +199,13 @@ const SideBar = ({}) => {
           width: isMobile ? '100%' : `${sideBarWidth}`,
           maxWidth: isMobile ? '100%' : `${MAX_SIDEBAR_WIDTH * 100}%`,
           position: isMobile ? 'fixed' : isSideBarPinned ? 'relative' : 'absolute',
-          paddingTop: isFullHeightInMobile
-            ? systemUIVisible
-              ? `${Math.max(safeAreaInsets?.top || 0, statusBarHeight)}px`
-              : `${safeAreaInsets?.top || 0}px`
-            : '0px',
+          paddingTop: `${getPanelTopInset({
+            isMobile,
+            isFullHeightInMobile,
+            systemUIVisible,
+            statusBarHeight,
+            safeAreaInsets,
+          })}px`,
         }}
       >
         <style jsx>{`

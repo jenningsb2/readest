@@ -5,10 +5,12 @@ on:
   release:
     types: [published]
 
+permissions: read-all
+
 jobs:
   get-release:
     permissions:
-      contents: write
+      contents: read
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.get-release.outputs.release_id }}
@@ -17,14 +19,14 @@ jobs:
       release_version: ${{ steps.get-release-notes.outputs.release_version }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
       - name: get version
         run: echo "PACKAGE_VERSION=$(node -p "require('./apps/readest-app/package.json').version")" >> $GITHUB_ENV
       - name: get release
         id: get-release
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const { data } = await github.rest.repos.getLatestRelease({
@@ -35,7 +37,7 @@ jobs:
             core.setOutput('release_tag', data.tag_name);
       - name: get release notes
         id: get-release-notes
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const fs = require('fs');
@@ -57,7 +59,7 @@ jobs:
     steps:
       - name: update release
         id: update-release
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           release_id: ${{ needs.get-release.outputs.release_id }}
           release_tag: ${{ needs.get-release.outputs.release_tag }}
@@ -87,7 +89,7 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: create KOReader plugin zip
         env:
@@ -116,10 +118,73 @@ jobs:
           echo "Uploading ${plugin_zip} to GitHub release"
           gh release upload ${{ needs.get-release.outputs.release_tag }} ${plugin_zip} --clobber
 
+  build-calibre-plugin:
+    needs: get-release
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: create calibre plugin zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=${{ needs.get-release.outputs.release_version }}
+
+          # Stamp PLUGIN_VERSION in __init__.py with the release version
+          # (from apps/readest-app/package.json, mirroring the koplugin's
+          # _meta.lua stamp above); the committed value is a dev placeholder.
+          version_tuple=$(echo "${version}" | awk -F. '{printf "(%d, %d, %d)", $1, $2, $3}')
+          perl -i -pe "s/^PLUGIN_VERSION = \(\d+, \d+, \d+\)/PLUGIN_VERSION = ${version_tuple}/" \
+            apps/readest-calibre-plugin/__init__.py
+
+          make -C apps/readest-calibre-plugin zip
+          plugin_zip="apps/readest-calibre-plugin/dist/Readest-${version}.calibre-plugin.zip"
+
+          echo "Uploading ${plugin_zip} to GitHub release"
+          gh release upload ${{ needs.get-release.outputs.release_tag }} ${plugin_zip} --clobber
+
+  build-browser-extension:
+    needs: get-release
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - name: setup node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: create and upload Send to Readest extension zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pnpm --filter @readest/send-to-readest-extension zip
+
+          extension_version=$(node -p "require('./apps/readest-app/extensions/send-to-readest/manifest.json').version")
+          extension_zip="apps/readest-app/extensions/send-to-readest/send-to-readest-${extension_version}.zip"
+
+          echo "Uploading ${extension_zip} to GitHub release"
+          gh release upload "${{ needs.get-release.outputs.release_tag }}" "${extension_zip}" --clobber
+
   build-tauri:
     needs: get-release
     permissions:
       contents: write
+      # Required by actions/attest-build-provenance: id-token mints the Sigstore
+      # OIDC identity, attestations writes the provenance to the repo's store.
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -154,47 +219,47 @@ jobs:
     runs-on: ${{ matrix.config.os }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: initialize git submodules
         run: git submodule update --init --recursive
 
       - name: setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
 
       - name: setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: 24
           cache: pnpm
 
       - name: setup Java (for Android build only)
         if: matrix.config.release == 'android'
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5
         with:
           distribution: 'zulu'
           java-version: '17'
 
       - name: setup Android SDK (for Android build only)
         if: matrix.config.release == 'android'
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
 
       - name: install NDK (for Android build only)
         if: matrix.config.release == 'android'
         run: sdkmanager "ndk;28.2.13676358"
 
       - name: install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: copy pdfjs-dist and simplecc-dist to public directory
         run: pnpm --filter @readest/readest-app setup-vendors
 
       - name: install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           targets: ${{ matrix.config.rust_target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: ${{ matrix.config.os }}-${{ matrix.config.release }}-${{ matrix.config.arch }}-cargo
 
@@ -223,6 +288,10 @@ jobs:
           echo "NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}" >> .env.local
           echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" >> .env.local
           echo "NEXT_PUBLIC_APP_PLATFORM=tauri" >> .env.local
+          echo "SENTRY_DSN=${{ secrets.SENTRY_DSN }}" >> .env.local
+          echo "SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}" >> .env.local
+          echo "SENTRY_ORG=readest" >> .env.local
+          echo "SENTRY_PROJECT=readest" >> .env.local
           cp .env.local apps/readest-app/.env.local
 
       - name: build and upload Android apks
@@ -265,13 +334,32 @@ jobs:
           gh release upload ${{ needs.get-release.outputs.release_tag }} $universial_apk.sig --clobber
           gh release upload ${{ needs.get-release.outputs.release_tag }} $arm64_apk.sig --clobber
 
+      - name: attest Android apks
+        if: matrix.config.release == 'android'
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            apps/readest-app/Readest_${{ needs.get-release.outputs.release_version }}_universal.apk
+            apps/readest-app/Readest_${{ needs.get-release.outputs.release_version }}_arm64.apk
+
       - name: download and update latest.json for Android release
         if: matrix.config.release == 'android'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd apps/readest-app/
-          curl -sL https://github.com/readest/readest/releases/latest/download/latest.json -o latest.json
+          # Use -f so curl fails on HTTP errors instead of writing the 404 body
+          # ("Not Found") into latest.json and clobbering the release asset with
+          # invalid JSON, which then breaks tauri-action's updater merge on every
+          # subsequent build.
+          if ! curl -fsSL https://github.com/readest/readest/releases/latest/download/latest.json -o latest.json; then
+            echo "::error::Failed to download existing latest.json; aborting to avoid clobbering the release asset."
+            exit 1
+          fi
+          if ! jq empty latest.json 2>/dev/null; then
+            echo "::error::Existing latest.json is not valid JSON; aborting."
+            exit 1
+          fi
 
           version=${{ needs.get-release.outputs.release_version }}
           universial_apk_url="https://github.com/readest/readest/releases/download/${{ needs.get-release.outputs.release_tag }}/Readest_${version}_universal.apk"
@@ -295,7 +383,24 @@ jobs:
         if: matrix.config.release == 'linux'
         run: cargo install tauri-cli --git https://github.com/tauri-apps/tauri --branch feat/truly-portable-appimage --force
 
-      - uses: tauri-apps/tauri-action@v0
+      # The truly-portable AppImage bundler downloads quick-sharun.sh from
+      # Anylinux-AppImages@main ONLY when it is not already in the tauri tools
+      # cache. An upstream strace-mode change (2026-06-29) made bundling launch
+      # the app under Xvfb and hang forever (#4906). Seed the cache with the
+      # last known-good revision so the bundler never fetches the moving
+      # main-branch script. Keep in sync with nightly.yml.
+      - name: pin quick-sharun.sh for AppImage bundling (Linux)
+        if: matrix.config.release == 'linux'
+        run: |
+          set -euo pipefail
+          cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+          mkdir -p "$cache_dir"
+          curl -fsSL --retry 3 -o "$cache_dir/quick-sharun.sh" \
+            "https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/b3a9e985cdedf7efa81d172f182cd13983743147/useful-tools/quick-sharun.sh"
+          chmod +x "$cache_dir/quick-sharun.sh"
+
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        id: tauri
         if: matrix.config.release != 'android'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -311,9 +416,23 @@ jobs:
           NODE_OPTIONS: '--max-old-space-size=8192'
         with:
           projectPath: apps/readest-app
+          # On Linux, build with the Rust `cargo tauri` CLI installed in the
+          # step above so the new (truly-portable AppImage) bundler is used.
+          # Without this, tauri-action falls back to the npm @tauri-apps/cli.
+          tauriScript: ${{ matrix.config.release == 'linux' && 'cargo tauri' || '' }}
           releaseId: ${{ needs.get-release.outputs.release_id }}
           releaseBody: ${{ needs.get-release.outputs.release_note }}
           args: ${{ matrix.config.args || '' }}
+
+      # Attest the freshly built desktop bundles (installers, AppImage, dmg,
+      # updater archives + their .sig). tauri-action reports their on-disk paths
+      # as a JSON array; fromJSON('"\n"') yields a real newline to join them into
+      # the newline-delimited list subject-path expects.
+      - name: attest desktop bundles
+        if: matrix.config.release != 'android' && steps.tauri.outputs.artifactPaths != ''
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ join(fromJSON(steps.tauri.outputs.artifactPaths), fromJSON('"\n"')) }}
 
       - name: upload release notes to GitHub release
         env:
@@ -367,13 +486,33 @@ jobs:
           echo "Uploading signature to GitHub release"
           gh release upload ${{ needs.get-release.outputs.release_tag }} $bin_file.sig --clobber
 
+      # The portable rebuild above is not produced by tauri-action, so it is not
+      # covered by the "attest desktop bundles" step; attest it here. Exactly one
+      # portable exe is staged at the workspace root per Windows leg.
+      - name: attest Windows portable binary
+        if: matrix.config.os == 'windows-latest'
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: Readest_*-portable.exe
+
       - name: download and update latest.json for Windows portable release
         if: matrix.config.os == 'windows-latest'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          curl -sL https://github.com/readest/readest/releases/latest/download/latest.json -o latest.json
+          # Use -f so curl fails on HTTP errors instead of writing the 404 body
+          # ("Not Found") into latest.json and clobbering the release asset with
+          # invalid JSON, which then breaks tauri-action's updater merge on every
+          # subsequent build.
+          if ! curl -fsSL https://github.com/readest/readest/releases/latest/download/latest.json -o latest.json; then
+            echo "::error::Failed to download existing latest.json; aborting to avoid clobbering the release asset."
+            exit 1
+          fi
+          if ! jq empty latest.json 2>/dev/null; then
+            echo "::error::Existing latest.json is not valid JSON; aborting."
+            exit 1
+          fi
 
           version=${{ needs.get-release.outputs.release_version }}
           arch=${{ matrix.config.arch }}
@@ -404,7 +543,6 @@ jobs:
     needs: [get-release, build-tauri]
     permissions:
       contents: read
-      actions: write
     uses: ./.github/workflows/upload-to-r2.yml
     with:
       tag: ${{ needs.get-release.outputs.release_tag }}

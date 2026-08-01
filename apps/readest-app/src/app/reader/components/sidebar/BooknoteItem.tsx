@@ -1,7 +1,7 @@
 import clsx from 'clsx';
 import dayjs from 'dayjs';
-import React, { useRef, useState } from 'react';
-import { MdEdit, MdDelete } from 'react-icons/md';
+import React, { useMemo, useRef, useState } from 'react';
+import { MdEdit, MdDelete, MdContentCopy } from 'react-icons/md';
 
 import { marked } from 'marked';
 import { useEnv } from '@/context/EnvContext';
@@ -13,8 +13,12 @@ import { useBookDataStore } from '@/store/bookDataStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
 import { eventDispatcher } from '@/utils/event';
+import { isCfiInLocation } from '@/utils/cfi';
+import { buildAnnotationUrl } from '@/utils/deeplink';
+import { buildAnnotationCopyMarkdown } from '@/utils/note';
+import { writeTextToClipboard } from '@/utils/clipboard';
+import { DEFAULT_NOTE_EXPORT_CONFIG } from '@/services/constants';
 import { removeBookNoteOverlays } from '../../utils/annotatorUtil';
-import useScrollToItem from '../../hooks/useScrollToItem';
 import TextButton from '@/components/TextButton';
 import TextEditor, { TextEditorRef } from '@/components/TextEditor';
 
@@ -30,7 +34,7 @@ const BooknoteItem: React.FC<BooknoteItemProps> = ({ bookKey, item, isNearest, o
   const { envConfig } = useEnv();
   const { settings } = useSettingsStore();
   const { getConfig, saveConfig, updateBooknotes } = useBookDataStore();
-  const { getProgress, getView, getViewsById } = useReaderStore();
+  const { getProgress, getView, getViewsById, getViewSettings } = useReaderStore();
   const { setNotebookEditAnnotation, setNotebookVisible } = useNotebookStore();
 
   const globalReadSettings = settings.globalReadSettings;
@@ -44,7 +48,22 @@ const BooknoteItem: React.FC<BooknoteItemProps> = ({ bookKey, item, isNearest, o
   const size18 = useResponsiveSize(18);
 
   const progress = getProgress(bookKey);
-  const { isCurrent, viewRef } = useScrollToItem(cfi, progress, isNearest);
+  // Active highlight: keep visual "current" state but don't scroll from the
+  // item itself anymore — the parent (virtualized) BooknoteView handles
+  // scrolling via virtuosoRef.scrollToIndex, avoiding N getBoundingClientRect
+  // calls when the list grows large.
+  const isCurrent = useMemo(
+    () => isCfiInLocation(cfi, progress?.location) || !!isNearest,
+    [cfi, progress?.location, isNearest],
+  );
+
+  // marked.parse is heavy when called on every list scroll re-render across
+  // hundreds of items. Cache by note text — note edits change item.note and
+  // bust the cache automatically.
+  const noteHtml = useMemo(() => (note ? marked.parse(note) : ''), [note]);
+
+  // dayjs().fromNow() reformats every render; cache per createdAt.
+  const createdAtLabel = useMemo(() => dayjs(item.createdAt).fromNow(), [item.createdAt]);
 
   const handleClickItem = (event: React.MouseEvent | React.KeyboardEvent) => {
     event.preventDefault();
@@ -78,6 +97,30 @@ const BooknoteItem: React.FC<BooknoteItemProps> = ({ bookKey, item, isNearest, o
   const editNote = (note: BookNote) => {
     setNotebookVisible(true);
     setNotebookEditAnnotation(note);
+  };
+
+  const handleCopyLink = () => {
+    const bookHash = item.bookHash || bookKey.split('-')[0]!;
+    const linkType =
+      getViewSettings(bookKey)?.noteExportConfig?.linkType ?? DEFAULT_NOTE_EXPORT_CONFIG.linkType;
+    const url = buildAnnotationUrl({ bookHash, noteId: item.id, cfi: item.cfi }, linkType);
+    const linkLabel = item.page
+      ? _('Page: {{number}}', { number: item.page })
+      : _('Open in Readest');
+    const markdown = buildAnnotationCopyMarkdown({
+      text: item.text,
+      note: item.note,
+      noteLabel: _('Note'),
+      url,
+      linkLabel,
+    });
+    void writeTextToClipboard(markdown);
+    eventDispatcher.dispatch('toast', {
+      type: 'info',
+      message: _('Copied to clipboard'),
+      className: 'whitespace-nowrap',
+      timeout: 2000,
+    });
   };
 
   const editBookmark = () => {
@@ -137,7 +180,7 @@ const BooknoteItem: React.FC<BooknoteItemProps> = ({ bookKey, item, isNearest, o
     <li
       // eslint-disable-next-line jsx-a11y/no-noninteractive-element-to-interactive-role
       role='button'
-      ref={viewRef}
+      aria-current={isCurrent ? 'page' : undefined}
       className={clsx(
         'booknote-item border-base-300 content group relative my-2 cursor-pointer rounded-lg p-2',
         isCurrent
@@ -168,7 +211,7 @@ const BooknoteItem: React.FC<BooknoteItemProps> = ({ bookKey, item, isNearest, o
           <div
             className='content prose prose-sm font-size-sm'
             dir='auto'
-            dangerouslySetInnerHTML={{ __html: marked.parse(item.note) }}
+            dangerouslySetInnerHTML={{ __html: noteHtml }}
           ></div>
         )}
         <div className='flex items-start'>
@@ -184,7 +227,7 @@ const BooknoteItem: React.FC<BooknoteItemProps> = ({ bookKey, item, isNearest, o
             <span
               className={clsx(
                 'booknote-text inline leading-normal',
-                item.note && 'content font-size-xs text-gray-500',
+                item.note && 'content font-size-xs text-base-content',
                 (item.style === 'underline' || item.style === 'squiggly') &&
                   'underline decoration-2',
                 item.style === 'highlight' && 'rounded-[4px] px-[2px] py-[1px]',
@@ -238,14 +281,28 @@ const BooknoteItem: React.FC<BooknoteItemProps> = ({ bookKey, item, isNearest, o
             <span className='truncate text-sm text-gray-500 sm:text-xs'>
               {item.page ? _('p {{page}}' + ' · ', { page: item.page }) : ''}
             </span>
-            <span className='truncate text-sm text-gray-500 sm:text-xs'>
-              {dayjs(item.createdAt).fromNow()}
-            </span>
+            <span className='truncate text-sm text-gray-500 sm:text-xs'>{createdAtLabel}</span>
           </div>
           <div
-            className={clsx('flex items-center justify-end gap-3', isEditable && 'w-full')}
+            className={clsx('flex items-center justify-end gap-4', isEditable && 'w-full')}
             dir='ltr'
           >
+            <button
+              onClick={handleCopyLink}
+              className='btn btn-ghost btn-xs text-base-content p-0 opacity-0 transition duration-300 ease-in-out hover:bg-transparent group-focus-within:opacity-100 group-hover:opacity-100'
+              aria-label={_('Copy')}
+            >
+              <MdContentCopy size={size18} />
+            </button>
+
+            <button
+              onClick={deleteNote.bind(null, item)}
+              className='btn btn-ghost btn-xs p-0 text-red-500 opacity-0 transition duration-300 ease-in-out hover:bg-transparent group-focus-within:opacity-100 group-hover:opacity-100'
+              aria-label={_('Delete')}
+            >
+              <MdDelete size={size18} />
+            </button>
+
             {isEditable && (
               <button
                 onClick={item.type === 'bookmark' ? editBookmark : editNote.bind(null, item)}
@@ -255,14 +312,6 @@ const BooknoteItem: React.FC<BooknoteItemProps> = ({ bookKey, item, isNearest, o
                 <MdEdit size={size18} />
               </button>
             )}
-
-            <button
-              onClick={deleteNote.bind(null, item)}
-              className='btn btn-ghost btn-xs p-0 text-red-500 opacity-0 transition duration-300 ease-in-out hover:bg-transparent group-focus-within:opacity-100 group-hover:opacity-100'
-              aria-label={_('Delete')}
-            >
-              <MdDelete size={size18} />
-            </button>
           </div>
         </div>
       </div>
@@ -270,4 +319,9 @@ const BooknoteItem: React.FC<BooknoteItemProps> = ({ bookKey, item, isNearest, o
   );
 };
 
-export default BooknoteItem;
+// Memoize: BooknoteView re-renders on every progress tick / config change.
+// Without React.memo each tick would re-render every visible note row even
+// though their props are unchanged. Default shallow compare is enough since
+// `item` and `onClick` are stable references from the parent's useMemo /
+// useCallback.
+export default React.memo(BooknoteItem);

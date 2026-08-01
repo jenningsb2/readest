@@ -64,6 +64,64 @@ function SyncAnnotations:generateNoteId(book_hash, note_type, pos0, pos1)
     return sha2.md5(raw):sub(1, 7)
 end
 
+-- Build the Readest note payload for a single KOReader annotation item, or nil
+-- if the item isn't a syncable highlight/bookmark. Shared by the push walk
+-- (getAnnotations) and the deletion path (recordDeletion) so a note's id is
+-- derived identically however it was created.
+function SyncAnnotations:buildNoteDescriptor(item, book_hash, meta_hash)
+    local note_text = item.note
+    if note_text == "" then note_text = nil end
+
+    local pos0 = item.pos0
+    local pos1 = item.pos1
+    if type(pos0) == "table" then pos0 = nil end
+    if type(pos1) == "table" then pos1 = nil end
+
+    if item.drawer and pos0 then
+        -- Annotation (highlight/underline/strikeout): has drawer and pos0/pos1
+        local style = "highlight"
+        if item.drawer == "underscore" then
+            style = "underline"
+        elseif item.drawer == "strikeout" then
+            style = "squiggly"
+        end
+
+        local id = item.id or self:generateNoteId(book_hash, "annotation", tostring(pos0), pos1 and tostring(pos1))
+        return {
+            bookHash = book_hash,
+            metaHash = meta_hash,
+            id = id,
+            type = "annotation",
+            xpointer0 = tostring(pos0),
+            xpointer1 = pos1 and tostring(pos1) or nil,
+            text = item.text or "",
+            note = note_text,
+            style = style,
+            color = KO_TO_READEST_COLOR[item.color or "yellow"],
+            page = item.pageno,
+            createdAt = self:parseDatetimeToMs(item.datetime),
+            updatedAt = self:parseDatetimeToMs(item.datetime_updated or item.datetime),
+        }
+    elseif not item.drawer and type(item.page) == "string" then
+        -- Bookmark: no drawer, position in page field (xpointer string)
+        local page_xp = item.page
+        local id = item.id or self:generateNoteId(book_hash, "bookmark", page_xp)
+        return {
+            bookHash = book_hash,
+            metaHash = meta_hash,
+            id = id,
+            type = "bookmark",
+            xpointer0 = page_xp,
+            text = item.text or "",
+            note = note_text,
+            page = item.pageno,
+            createdAt = self:parseDatetimeToMs(item.datetime),
+            updatedAt = self:parseDatetimeToMs(item.datetime_updated or item.datetime),
+        }
+    end
+    return nil
+end
+
 function SyncAnnotations:getAnnotations(ui, settings, book_hash, meta_hash, full_sync)
     local annotations = ui.annotation and ui.annotation.annotations
     if not annotations then return {} end
@@ -73,73 +131,130 @@ function SyncAnnotations:getAnnotations(ui, settings, book_hash, meta_hash, full
     local notes = {}
     for _, item in ipairs(annotations) do
         local updated_at = self:parseDatetimeToMs(item.datetime_updated or item.datetime)
-        if updated_at <= last_sync then
-            goto skip
-        end
-
-        local pos0 = item.pos0
-        local pos1 = item.pos1
-        if type(pos0) == "table" then pos0 = nil end
-        if type(pos1) == "table" then pos1 = nil end
-
-        if item.drawer and pos0 then
-            -- Annotation (highlight/underline/strikeout): has drawer and pos0/pos1
-            local style = "highlight"
-            if item.drawer == "underscore" then
-                style = "underline"
-            elseif item.drawer == "strikeout" then
-                style = "squiggly"
+        if updated_at > last_sync then
+            local note = self:buildNoteDescriptor(item, book_hash, meta_hash)
+            if note then
+                notes[#notes + 1] = note
             end
-
-            local id = item.id or self:generateNoteId(book_hash, "annotation", tostring(pos0), pos1 and tostring(pos1))
-            local note_text = item.note
-            if note_text == "" then note_text = nil end
-            table.insert(notes, {
-                bookHash = book_hash,
-                metaHash = meta_hash,
-                id = id,
-                type = "annotation",
-                xpointer0 = tostring(pos0),
-                xpointer1 = pos1 and tostring(pos1) or nil,
-                text = item.text or "",
-                note = note_text,
-                style = style,
-                color = KO_TO_READEST_COLOR[item.color or "yellow"],
-                page = item.pageno,
-                createdAt = self:parseDatetimeToMs(item.datetime),
-                updatedAt = updated_at,
-            })
-        elseif not item.drawer and type(item.page) == "string" then
-            -- Bookmark: no drawer, position in page field (xpointer string)
-            local page_xp = item.page
-            local id = item.id or self:generateNoteId(book_hash, "bookmark", page_xp)
-            local note_text = item.note
-            if note_text == "" then note_text = nil end
-            table.insert(notes, {
-                bookHash = book_hash,
-                metaHash = meta_hash,
-                id = id,
-                type = "bookmark",
-                xpointer0 = page_xp,
-                text = item.text or "",
-                note = note_text,
-                page = item.pageno,
-                createdAt = self:parseDatetimeToMs(item.datetime),
-                updatedAt = updated_at,
-            })
         end
-        ::skip::
     end
     return notes
 end
 
+-- Drop local annotations the server has tombstoned (deleted_at set), so a
+-- highlight deleted on Readest also disappears in KOReader. Without this,
+-- pull only skips deleted notes — the local copy lingers and any later
+-- push resurrects it on the server, making it reappear (issue #4119).
+function SyncAnnotations:removeDeletedAnnotations(annotation_mgr, notes, book_hash)
+    local annotations = annotation_mgr and annotation_mgr.annotations
+    if not annotations or #annotations == 0 then return 0 end
+
+    -- Map every local annotation to its index by id and by position so a
+    -- tombstone can be matched however it was originally created: pulled
+    -- notes carry a stored id, native KOReader highlights don't (their id
+    -- is derived from book hash + positions, matching what push uploads).
+    local index_by_id = {}
+    local index_by_anno = {}
+    local index_by_bookmark = {}
+    for i, item in ipairs(annotations) do
+        if item.id then
+            index_by_id[item.id] = i
+        end
+        if item.drawer then
+            local pos0 = item.pos0
+            local pos1 = item.pos1
+            if type(pos0) == "table" then pos0 = nil end
+            if type(pos1) == "table" then pos1 = nil end
+            if pos0 then
+                index_by_anno[tostring(pos0) .. "|" .. tostring(pos1 or "")] = i
+                if not item.id then
+                    local id = self:generateNoteId(book_hash, "annotation", tostring(pos0), pos1 and tostring(pos1))
+                    index_by_id[id] = i
+                end
+            end
+        elseif type(item.page) == "string" then
+            index_by_bookmark[item.page] = i
+            if not item.id then
+                local id = self:generateNoteId(book_hash, "bookmark", item.page)
+                index_by_id[id] = i
+            end
+        end
+    end
+
+    local to_remove = {}
+    for _, note in ipairs(notes) do
+        if note.deleted_at then
+            local idx
+            if note.id and index_by_id[note.id] then
+                idx = index_by_id[note.id]
+            elseif note.type == "bookmark" and note.xpointer0 then
+                idx = index_by_bookmark[note.xpointer0]
+            elseif note.xpointer0 then
+                idx = index_by_anno[note.xpointer0 .. "|" .. (note.xpointer1 or "")]
+            end
+            if idx then
+                to_remove[idx] = true
+            end
+        end
+    end
+
+    -- Remove highest index first so earlier indexes stay valid.
+    local indexes = {}
+    for idx in pairs(to_remove) do
+        indexes[#indexes + 1] = idx
+    end
+    table.sort(indexes, function(a, b) return a > b end)
+    for _, idx in ipairs(indexes) do
+        table.remove(annotations, idx)
+    end
+    return #indexes
+end
+
+-- Stash a tombstone for a note deleted locally. By the time auto-sync runs the
+-- deleted item is already gone from ui.annotation.annotations, so the push walk
+-- can't see it; without this the deletion never reaches the server and the
+-- highlight resurrects on the next pull (issue #4119, push direction). The
+-- tombstone is a normal note payload with deletedAt set, persisted in the
+-- per-book sidecar and folded into the next push (see push()), then cleared
+-- once the server accepts it.
+function SyncAnnotations:recordDeletion(doc_settings, item)
+    if not doc_settings or not item then return end
+    local book_hash = doc_settings:readSetting("partial_md5_checksum")
+    if not book_hash then return end
+
+    local doc_readest_sync = doc_settings:readSetting("readest_sync") or {}
+    local note = self:buildNoteDescriptor(item, book_hash, doc_readest_sync.meta_hash_v1)
+    if not note then return end
+    note.deletedAt = os.time() * 1000
+
+    local deleted = doc_readest_sync.deleted_notes or {}
+    for _, t in ipairs(deleted) do
+        if t.id == note.id then return end -- already recorded
+    end
+    deleted[#deleted + 1] = note
+    doc_readest_sync.deleted_notes = deleted
+    doc_settings:saveSetting("readest_sync", doc_readest_sync)
+end
+
 function SyncAnnotations:push(ui, settings, client, interactive, full_sync)
     local book_hash = ui.doc_settings:readSetting("partial_md5_checksum")
-    local meta_hash = ui.doc_settings:readSetting("readest_sync") or {}
-    meta_hash = meta_hash.meta_hash_v1
+    local doc_readest_sync = ui.doc_settings:readSetting("readest_sync") or {}
+    local meta_hash = doc_readest_sync.meta_hash_v1
     if not book_hash or not meta_hash then return end
 
     local annotations = self:getAnnotations(ui, settings, book_hash, meta_hash, full_sync)
+
+    -- Fold in tombstones for notes deleted locally since the last push. These
+    -- are gone from ui.annotation.annotations, so getAnnotations can't see them;
+    -- re-stamp the current book/meta hash in case they were recorded before the
+    -- book was registered for sync.
+    local deleted_notes = doc_readest_sync.deleted_notes or {}
+    for _, t in ipairs(deleted_notes) do
+        t.bookHash = book_hash
+        t.metaHash = meta_hash
+        annotations[#annotations + 1] = t
+    end
+
     if #annotations == 0 then
         if interactive then
             UIManager:show(InfoMessage:new{
@@ -184,9 +299,12 @@ function SyncAnnotations:push(ui, settings, client, interactive, full_sync)
                 settings.last_notes_sync_at = os.time() * 1000
                 G_reader_settings:saveSetting("readest_sync", settings)
                 if ui.doc_settings then
-                    local doc_readest_sync = ui.doc_settings:readSetting("readest_sync") or {}
-                    doc_readest_sync.last_synced_at_notes = os.time()
-                    ui.doc_settings:saveSetting("readest_sync", doc_readest_sync)
+                    local synced = ui.doc_settings:readSetting("readest_sync") or {}
+                    synced.last_synced_at_notes = os.time()
+                    -- The server has the tombstones now; drop them so they don't
+                    -- ride along on every future push.
+                    synced.deleted_notes = nil
+                    ui.doc_settings:saveSetting("readest_sync", synced)
                 end
             end
         end
@@ -251,6 +369,10 @@ function SyncAnnotations:pull(ui, settings, client, book_hash, meta_hash, dialog
             logger.dbg("ReadestSync: Pulled annotations from sync:", #data)
             local annotation_mgr = ui.annotation
             if not annotation_mgr then return end
+
+            -- Honor remote deletions before adding: drop local annotations
+            -- the server has tombstoned so they don't reappear (issue #4119).
+            local removed = self:removeDeletedAnnotations(annotation_mgr, data, book_hash)
 
             -- Build dedup sets: by ID, by pos0|pos1 for annotations, by page xpointer for bookmarks
             local existing_ids = {}
@@ -378,7 +500,7 @@ function SyncAnnotations:pull(ui, settings, client, book_hash, meta_hash, dialog
                 })
             end
 
-            if added > 0 then
+            if added > 0 or removed > 0 then
                 UIManager:setDirty(dialog, "ui")
             end
         end

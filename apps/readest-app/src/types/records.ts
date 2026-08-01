@@ -11,6 +11,9 @@ export interface DBBook {
   tags?: string[];
   progress?: [number, number];
   reading_status?: string;
+  reading_status_updated_at?: string | null;
+  cover_hash?: string | null;
+  cover_updated_at?: string | null;
 
   metadata?: string | null;
   created_at?: string;
@@ -49,6 +52,7 @@ export interface DBBookNote {
   style?: string;
   color?: string;
   note: string;
+  global?: boolean;
 
   created_at?: string;
   updated_at?: string;

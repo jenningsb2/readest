@@ -28,8 +28,15 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useFileSelector } from '@/hooks/useFileSelector';
 import { useCustomDictionaryStore } from '@/store/customDictionaryStore';
 import { eventDispatcher } from '@/utils/event';
-import { evictProvider } from '@/services/dictionaries/registry';
+import { evictProvider, isSystemDictionaryEnabled } from '@/services/dictionaries/registry';
 import { BUILTIN_PROVIDER_IDS } from '@/services/dictionaries/types';
+import {
+  clearRememberedLookupApp,
+  getRememberedLookupApp,
+  isSystemDictionaryAvailable,
+  isSystemDictionarySupported,
+  type RememberedLookupApp,
+} from '@/services/dictionaries/systemDictionary';
 import { queueDictionaryBinaryUpload } from '@/services/sync/replicaBinaryUpload';
 import type { ImportedDictionary, WebSearchEntry } from '@/services/dictionaries/types';
 import {
@@ -37,7 +44,17 @@ import {
   isValidUrlTemplate,
 } from '@/services/dictionaries/webSearchTemplates';
 import SubPageHeader from './SubPageHeader';
-import { Tips } from './primitives';
+import { BoxedList, SettingsRow, SettingsSelect, Tips } from './primitives';
+
+/** Dictionary popup font-size multipliers, surfaced as percentages (#4443). */
+const FONT_SCALE_OPTIONS = [
+  { value: '0.85', label: '85%' },
+  { value: '1', label: '100%' },
+  { value: '1.15', label: '115%' },
+  { value: '1.3', label: '130%' },
+  { value: '1.5', label: '150%' },
+  { value: '1.75', label: '175%' },
+];
 
 interface CustomDictionariesProps {
   onBack: () => void;
@@ -92,12 +109,17 @@ const builtinWebLabel = (id: string, _: (key: string) => string): string => {
 const builtinLabel = (id: string, _: (key: string) => string): string => {
   if (id === BUILTIN_PROVIDER_IDS.wiktionary) return _('Wiktionary');
   if (id === BUILTIN_PROVIDER_IDS.wikipedia) return _('Wikipedia');
+  if (id === BUILTIN_PROVIDER_IDS.systemDictionary) return _('System Dictionary');
   return id;
 };
 
 interface SortableRowProps {
   row: ProviderRow;
   enabled: boolean;
+  /** True when System Dictionary is on and this row is a non-system provider.
+   * The toggle reflects the persisted enabled flag (so the user sees what
+   * will come back when System is turned off) but is rendered read-only. */
+  lockedBySystem: boolean;
   isDeleteMode: boolean;
   isEditMode: boolean;
   onToggle: (id: string, next: boolean) => void;
@@ -110,6 +132,7 @@ interface SortableRowProps {
 const SortableRow: React.FC<SortableRowProps> = ({
   row,
   enabled,
+  lockedBySystem,
   isDeleteMode,
   isEditMode,
   onToggle,
@@ -178,11 +201,15 @@ const SortableRow: React.FC<SortableRowProps> = ({
 
       <input
         type='checkbox'
-        className='toggle toggle-sm shrink-0'
+        className={clsx(
+          'toggle toggle-sm shrink-0',
+          lockedBySystem && 'cursor-not-allowed opacity-60',
+        )}
         checked={enabled}
         onChange={() => onToggle(row.id, !enabled)}
-        disabled={row.disabled}
+        disabled={row.disabled || lockedBySystem}
         aria-label={enabled ? _('Disable') : _('Enable')}
+        title={lockedBySystem ? _('Disable System Dictionary first to change this.') : undefined}
       />
 
       {/* Edit pencil — parity with the trailing delete X, but for the
@@ -237,11 +264,13 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
     updateDictionary,
     reorder,
     setEnabled,
+    setFontScale,
     addWebSearch,
     updateWebSearch,
     removeWebSearch,
     saveCustomDictionaries,
     loadCustomDictionaries,
+    markAvailableByContentId,
   } = useCustomDictionaryStore();
 
   useEffect(() => {
@@ -251,6 +280,35 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
 
   const { selectFiles } = useFileSelector(appService, _);
   const [importing, setImporting] = useState(false);
+  // Android only: the dictionary app remembered for the browser-excluding
+  // system-lookup chooser (issue #4559). Stays null on every other platform
+  // and whenever nothing has been remembered, so the reset row below only
+  // surfaces for the narrow case that can get "stuck" on one app.
+  const [rememberedLookupApp, setRememberedLookupApp] = useState<RememberedLookupApp | null>(null);
+  useEffect(() => {
+    if (!appService?.isAndroidApp) return;
+    let cancelled = false;
+    void getRememberedLookupApp().then((app) => {
+      if (!cancelled) setRememberedLookupApp(app);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [appService]);
+  const handleFontScaleChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setFontScale(Number(e.target.value));
+    await saveCustomDictionaries(envConfig);
+  };
+
+  const handleResetLookupApp = async () => {
+    await clearRememberedLookupApp();
+    setRememberedLookupApp(null);
+    eventDispatcher.dispatch('toast', {
+      type: 'info',
+      message: _('Lookup app reset. The next lookup will ask again.'),
+      timeout: 4000,
+    });
+  };
   // Edit and Delete are mutually-exclusive row affordances. Toggling one on
   // turns the other off so the trailing column never shows two icons at once.
   const [isDeleteMode, setIsDeleteMode] = useState(false);
@@ -338,7 +396,32 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
     const dictById = new Map(dictionaries.map((d) => [d.id, d]));
     const webById = new Map((settings.webSearches ?? []).map((w) => [w.id, w]));
     const rows: ProviderRow[] = [];
+    // Cache cross-row platform checks so we don't re-walk navigator
+    // for every system-id encounter (and so the first iteration
+    // settles before the conditional inside the loop).
+    const systemSupported = isSystemDictionarySupported();
+    const systemAvailable = isSystemDictionaryAvailable();
     for (const id of settings.providerOrder) {
+      if (id === BUILTIN_PROVIDER_IDS.systemDictionary) {
+        // On platforms that don't expose a native dictionary surface
+        // (web, Linux, Windows), hide the row entirely so the user
+        // never sees an option that can't work. On supported-but-not-
+        // yet-wired platforms (iOS, Android in v1), surface the row
+        // with the toggle disabled so it stays discoverable.
+        if (!systemSupported) continue;
+        const disabled = !systemAvailable;
+        rows.push({
+          id,
+          label: builtinLabel(id, _),
+          kind: 'builtin',
+          badge: _('System'),
+          disabled,
+          reason: disabled
+            ? _('System dictionary integration is coming soon on this platform.')
+            : undefined,
+        });
+        continue;
+      }
       if (id.startsWith('builtin:')) {
         rows.push({
           id,
@@ -408,6 +491,14 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
   const rows = buildRows();
   const hasDeletable = rows.some((r) => r.imported || (r.kind === 'web' && !r.builtinWeb));
 
+  // System-dictionary handoff is exclusive at lookup time — but only on
+  // platforms where it's actually supported. `providerEnabled` is whole-field
+  // synced across devices, so the flag can arrive (true) on web / Linux /
+  // Windows where there's no handoff; there it's a no-op and must NOT lock the
+  // other providers' toggles. `isSystemDictionaryEnabled` applies the same
+  // platform gate the annotator uses, so the lock matches real lookup behavior.
+  const systemDictionaryActive = isSystemDictionaryEnabled(settings);
+
   // dnd-kit sensors. PointerSensor with a small distance gate avoids
   // hijacking simple clicks on the drag handle. TouchSensor with a delay
   // matches mobile UX (long-press to drag). Keyboard support gives drag
@@ -423,18 +514,41 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
     setImporting(true);
     try {
       const result = await selectFiles({ type: 'dictionaries', multiple: true });
-      if (result.error || result.files.length === 0) return;
+      if (result.error) {
+        eventDispatcher.dispatch('toast', {
+          type: 'error',
+          message: _('Failed to import dictionary: {{message}}', { message: result.error }),
+          timeout: 4000,
+        });
+        return;
+      }
+      // User cancelled the picker — staying silent is the right call here.
+      if (result.files.length === 0) return;
       const importResult = await appService?.importDictionaries(result.files, dictionaries);
-      if (!importResult) return;
+      if (!importResult) {
+        eventDispatcher.dispatch('toast', {
+          type: 'error',
+          message: _('Failed to import dictionary: {{message}}', {
+            message: _('App service is not available'),
+          }),
+          timeout: 4000,
+        });
+        return;
+      }
       let added = 0;
       for (const dict of importResult.imported) {
         addDictionary(dict);
+        // The freshly imported bundle exists on disk now; clear any lingering
+        // `unavailable` flag on an in-memory entry with the same contentId
+        // (e.g. when a prior import lost its bundle dir for any reason).
+        if (dict.contentId) markAvailableByContentId(dict.contentId);
         if (appService) void queueDictionaryBinaryUpload(dict, appService);
         added += 1;
       }
       let replaced = 0;
       for (const { oldIds, newDict } of importResult.replacements) {
         replaceDictionaries(oldIds, newDict);
+        if (newDict.contentId) markAvailableByContentId(newDict.contentId);
         if (appService) void queueDictionaryBinaryUpload(newDict, appService);
         // Invalidate any cached provider instances for the replaced ids so
         // their next lookup picks up the new bundle's files.
@@ -458,6 +572,26 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
           timeout: 2500,
         });
       }
+      // Bundles that landed in the library but are marked unsupported (e.g.
+      // record-block-encrypted MDX, raw .dict without DictZip). They show
+      // disabled in the list — surface the first reason so the user knows
+      // their "imported" toast doesn't mean it's usable.
+      const unsupportedDicts = [
+        ...importResult.imported,
+        ...importResult.replacements.map((r) => r.newDict),
+      ].filter((d) => d.unsupported);
+      if (unsupportedDicts.length > 0) {
+        const firstReason = unsupportedDicts.find((d) => d.unsupportedReason)?.unsupportedReason;
+        eventDispatcher.dispatch('toast', {
+          type: 'warning',
+          message: firstReason
+            ? _('Unsupported dictionary: {{reason}}', { reason: firstReason })
+            : _('{{count}} dictionary is unsupported and disabled', {
+                count: unsupportedDicts.length,
+              }),
+          timeout: 5000,
+        });
+      }
       if (importResult.orphanFiles.length > 0) {
         eventDispatcher.dispatch('toast', {
           type: 'warning',
@@ -465,6 +599,13 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
             names: importResult.orphanFiles.join(', '),
           }),
           timeout: 4000,
+        });
+      }
+      if (added === 0 && replaced === 0 && importResult.orphanFiles.length === 0) {
+        eventDispatcher.dispatch('toast', {
+          type: 'info',
+          message: _('No new dictionaries were imported'),
+          timeout: 2500,
         });
       }
     } catch (err) {
@@ -622,6 +763,14 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
                   key={row.id}
                   row={row}
                   enabled={settings.providerEnabled[row.id] !== false}
+                  // System-dictionary handoff is exclusive at lookup time, so
+                  // while it's on the other providers' toggles only express a
+                  // "what to restore when System is off" choice. Render them
+                  // read-only so the user can't accidentally clear that
+                  // restoration state.
+                  lockedBySystem={
+                    systemDictionaryActive && row.id !== BUILTIN_PROVIDER_IDS.systemDictionary
+                  }
                   isDeleteMode={isDeleteMode}
                   isEditMode={isEditMode}
                   onToggle={handleToggle}
@@ -635,6 +784,23 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
           </DndContext>
         </div>
       </div>
+
+      <BoxedList
+        className='mt-4'
+        title={_('Appearance')}
+        description={_(
+          'Sets the text size of dictionary results, independent of the reading view.',
+        )}
+      >
+        <SettingsRow label={_('Font Size')}>
+          <SettingsSelect
+            value={String(settings.fontScale ?? 1)}
+            onChange={handleFontScaleChange}
+            options={FONT_SCALE_OPTIONS}
+            ariaLabel={_('Font Size')}
+          />
+        </SettingsRow>
+      </BoxedList>
 
       <div className='mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2'>
         <button
@@ -655,6 +821,9 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
         >
           <span
             className={clsx(
+              // eink-inverted keeps the "+" legible on its dark badge (#4454);
+              // without it the badge collapses to a solid black spot in eink.
+              'eink-inverted',
               'flex h-5 w-5 items-center justify-center rounded-full',
               'bg-base-200 text-base-content/60',
               'transition-colors duration-150',
@@ -683,6 +852,9 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
         >
           <span
             className={clsx(
+              // eink-inverted keeps the "+" legible on its dark badge (#4454);
+              // without it the badge collapses to a solid black spot in eink.
+              'eink-inverted',
               'flex h-5 w-5 items-center justify-center rounded-full',
               'bg-base-200 text-base-content/60',
               'transition-colors duration-150',
@@ -694,6 +866,33 @@ const CustomDictionaries: React.FC<CustomDictionariesProps> = ({ onBack }) => {
           <span className='line-clamp-1'>{_('Add Web Search')}</span>
         </button>
       </div>
+
+      {/* Reset the remembered system-lookup app. Only rendered on Android
+          when a dictionary has actually been remembered from the
+          browser-excluding chooser (issue #4559), so the user can switch
+          to another installed dictionary without uninstalling. */}
+      {rememberedLookupApp && (
+        <div
+          className={clsx(
+            'eink-bordered mt-4 flex items-center justify-between gap-3',
+            'border-base-200 bg-base-100 rounded-lg border px-4 py-3',
+          )}
+        >
+          <div className='min-w-0'>
+            <div className='text-base-content text-sm font-medium'>{_('System Lookup App')}</div>
+            <div className='text-base-content/60 line-clamp-1 text-xs'>
+              {rememberedLookupApp.label}
+            </div>
+          </div>
+          <button
+            type='button'
+            onClick={handleResetLookupApp}
+            className='btn btn-ghost btn-sm eink-bordered shrink-0'
+          >
+            {_('Reset')}
+          </button>
+        </div>
+      )}
 
       <Tips className='mt-4'>
         <li>{_('StarDict bundles need .ifo, .idx, and .dict.dz files (.syn optional).')}</li>

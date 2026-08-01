@@ -1,18 +1,20 @@
 import clsx from 'clsx';
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import React, { useCallback, useMemo, useEffect, useRef } from 'react';
 import { useEnv } from '@/context/EnvContext';
 import { useSpatialNavigation } from '@/app/reader/hooks/useSpatialNavigation';
 import { useReaderStore } from '@/store/readerStore';
 import { useSidebarStore } from '@/store/sidebarStore';
 import { useBookDataStore } from '@/store/bookDataStore';
+import { FIXED_LAYOUT_FORMATS } from '@/types/book';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useDeviceControlStore } from '@/store/deviceStore';
 import { eventDispatcher } from '@/utils/event';
-import { FooterBarProps, NavigationHandlers, FooterBarChildProps } from './types';
+import type { FooterBarProps, NavigationHandlers, FooterBarChildProps } from './types';
 import { debounce } from '@/utils/debounce';
 import { RSVPControl } from '../rsvp';
 import MobileFooterBar from './MobileFooterBar';
 import DesktopFooterBar from './DesktopFooterBar';
+import { getFooterBarPosition } from './position';
 import TTSControl from '../tts/TTSControl';
 
 const FooterBar: React.FC<FooterBarProps> = ({
@@ -26,9 +28,9 @@ const FooterBar: React.FC<FooterBarProps> = ({
   const _ = useTranslation();
   const { appService } = useEnv();
   const { getConfig, setConfig, getBookData } = useBookDataStore();
-  const { hoveredBookKey, setHoveredBookKey } = useReaderStore();
+  const { hoveredBookKey, setHoveredBookKey, bottomBarTab, setBottomBarTab } = useReaderStore();
   const { getView, getViewState, getProgress, getViewSettings } = useReaderStore();
-  const { isSideBarVisible, setSideBarVisible } = useSidebarStore();
+  const { isSideBarVisible, isSideBarPinned, setSideBarVisible } = useSidebarStore();
   const { acquireBackKeyInterception, releaseBackKeyInterception } = useDeviceControlStore();
 
   const view = getView(bookKey);
@@ -38,15 +40,14 @@ const FooterBar: React.FC<FooterBarProps> = ({
   const progress = getProgress(bookKey);
   const viewSettings = getViewSettings(bookKey);
 
-  const [userSelectedTab, setUserSelectedTab] = useState('');
-  const actionTab = hoveredBookKey === bookKey ? userSelectedTab : '';
+  const actionTab = hoveredBookKey === bookKey ? bottomBarTab : '';
   const isVisible = hoveredBookKey === bookKey;
 
   const docs = view?.renderer.getContents() ?? [];
   const pointerInDoc = docs.some(({ doc }) => doc?.body?.style.cursor === 'pointer');
 
   const progressInfo = useMemo(
-    () => (bookFormat === 'PDF' ? section : pageinfo),
+    () => (FIXED_LAYOUT_FORMATS.has(bookFormat) ? section : pageinfo),
     [bookFormat, section, pageinfo],
   );
 
@@ -99,7 +100,7 @@ const FooterBar: React.FC<FooterBarProps> = ({
 
   const handleSetActionTab = useCallback(
     (tab: string) => {
-      setUserSelectedTab((prevTab) => (prevTab === tab ? '' : tab));
+      setBottomBarTab(bottomBarTab === tab ? '' : tab);
 
       if (tab === 'tts') {
         if (viewState?.ttsEnabled) {
@@ -125,8 +126,10 @@ const FooterBar: React.FC<FooterBarProps> = ({
     [
       config,
       bookKey,
+      bottomBarTab,
       viewState?.ttsEnabled,
       setConfig,
+      setBottomBarTab,
       setSideBarVisible,
       setHoveredBookKey,
       handleSpeakText,
@@ -221,7 +224,7 @@ const FooterBar: React.FC<FooterBarProps> = ({
     !forceMobileLayout && 'sm:h-[52px] sm:bg-base-100 sm:border-none',
     'not-eink:border-base-300/50 eink:border-base-content border-t',
     'transition-[opacity,transform] duration-300',
-    forceMobileLayout || window.innerWidth < 640 ? 'fixed' : 'absolute',
+    getFooterBarPosition(forceMobileLayout || window.innerWidth < 640, isSideBarPinned),
     appService?.hasRoundedWindow && 'rounded-window-bottom-right',
     !isSideBarVisible && appService?.hasRoundedWindow && 'rounded-window-bottom-left',
     isHoveredAnim && 'hover-bar-anim',

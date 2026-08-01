@@ -1,7 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useEnv } from '@/context/EnvContext';
 import { useReaderStore } from '@/store/readerStore';
-import { useDeviceControlStore } from '@/store/deviceStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useBookDataStore } from '@/store/bookDataStore';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -10,19 +9,32 @@ import { useEinkMode } from '@/hooks/useEinkMode';
 import { getStyles } from '@/utils/style';
 import { getMaxInlineSize } from '@/utils/config';
 import { saveSysSettings, saveViewSettings } from '@/helpers/settings';
+import { PageTurnStyle } from '@/types/book';
 import { SettingsPanelPanelProp } from './SettingsDialog';
 import { annotationToolQuickActions } from '@/app/reader/components/annotator/AnnotationTools';
-import { BoxedList, SettingsRow, SettingsSelect, SettingsSwitchRow } from './primitives';
+import { applyPageTurnAttributes } from '@/app/reader/hooks/useCapturedTurn';
+import { isTauriAppPlatform } from '@/services/environment';
+import {
+  BoxedList,
+  NavigationRow,
+  SettingsRow,
+  SettingsSelect,
+  SettingsSwitchRow,
+} from './primitives';
 import NumberInput from './NumberInput';
+import PageTurnerSettings from './PageTurnerSettings';
+import AnnotationToolbarCustomizer from './AnnotationToolbarCustomizer';
+import { DEFAULT_ANNOTATION_TOOLBAR_ITEMS } from '@/utils/annotationToolbar';
+import { canShareText } from '@/utils/share';
+import { optInTelemetry, optOutTelemetry } from '@/utils/telemetry';
 
 const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }) => {
   const _ = useTranslation();
   const { envConfig, appService } = useEnv();
-  const { getView, getViewSettings, recreateViewer } = useReaderStore();
+  const { getView, getViews, getViewSettings, recreateViewer } = useReaderStore();
   const { getBookData } = useBookDataStore();
   const { settings } = useSettingsStore();
   const { applyEinkMode } = useEinkMode();
-  const { acquireVolumeKeyInterception, releaseVolumeKeyInterception } = useDeviceControlStore();
   const bookData = getBookData(bookKey);
   const viewSettings = getViewSettings(bookKey) || settings.globalViewSettings;
 
@@ -30,11 +42,11 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
   const [noContinuousScroll, setNoContinuousScroll] = useState(viewSettings.noContinuousScroll);
   const [scrollingOverlap, setScrollingOverlap] = useState(viewSettings.scrollingOverlap);
   const [hideScrollbar, setHideScrollbar] = useState(viewSettings.hideScrollbar || false);
-  const [volumeKeysToFlip, setVolumeKeysToFlip] = useState(viewSettings.volumeKeysToFlip);
   const [showPaginationButtons, setShowPaginationButtons] = useState(
     viewSettings.showPaginationButtons,
   );
   const [isDisableClick, setIsDisableClick] = useState(viewSettings.disableClick);
+  const [isDisableSwipe, setIsDisableSwipe] = useState(viewSettings.disableSwipe);
   const [fullscreenClickArea, setFullscreenClickArea] = useState(viewSettings.fullscreenClickArea);
   const [swapClickArea, setSwapClickArea] = useState(viewSettings.swapClickArea);
   const [isDisableDoubleClick, setIsDisableDoubleClick] = useState(viewSettings.disableDoubleClick);
@@ -45,14 +57,38 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     viewSettings.annotationQuickAction,
   );
   const [copyToNotebook, setCopyToNotebook] = useState(viewSettings.copyToNotebook);
+  const [showToolbarCustomizer, setShowToolbarCustomizer] = useState(false);
   const [animated, setAnimated] = useState(viewSettings.animated);
+  const [pageTurnStyle, setPageTurnStyle] = useState(viewSettings.pageTurnStyle || 'push');
   const [isEink, setIsEink] = useState(viewSettings.isEink);
   const [isColorEink, setIsColorEink] = useState(viewSettings.isColorEink);
   const [autoScreenBrightness, setAutoScreenBrightness] = useState(settings.autoScreenBrightness);
+  const [swipeBrightnessGesture, setSwipeBrightnessGesture] = useState(
+    settings.swipeBrightnessGesture,
+  );
   const [screenWakeLock, setScreenWakeLock] = useState(settings.screenWakeLock);
+  const [autohideCursor, setAutohideCursor] = useState(settings.autohideCursor);
   const [allowScript, setAllowScript] = useState(viewSettings.allowScript);
+  const [isAutoCheckUpdates, setIsAutoCheckUpdates] = useState(settings.autoCheckUpdates);
+  const [isNightlyChannel, setIsNightlyChannel] = useState(settings.updateChannel === 'nightly');
+  const [isTelemetryEnabled, setIsTelemetryEnabled] = useState(settings.telemetryEnabled);
 
   const resetToDefaults = useResetViewSettings();
+  const pageTurnerResetRef = useRef<() => void>(() => {});
+  const canShare = canShareText(appService);
+
+  // The layered styles need an engine with full View Transitions support or
+  // the Tauri captured-turn fallback; engines like iOS 18 WebKit crash on
+  // the VT turns, so on the web they only get Push (readest#555).
+  const turnStyleOptions = [
+    { value: 'push', label: _('Push') },
+    ...(appService?.supportsViewTransitionGroup || isTauriAppPlatform()
+      ? [
+          { value: 'slide', label: _('Slide') },
+          { value: 'curl', label: _('Page Curl') },
+        ]
+      : []),
+  ];
 
   const handleReset = () => {
     resetToDefaults({
@@ -60,9 +96,9 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
       noContinuousScroll: setNoContinuousScroll,
       scrollingOverlap: setScrollingOverlap,
       hideScrollbar: setHideScrollbar,
-      volumeKeysToFlip: setVolumeKeysToFlip,
       showPaginationButtons: setShowPaginationButtons,
       disableClick: setIsDisableClick,
+      disableSwipe: setIsDisableSwipe,
       swapClickArea: setSwapClickArea,
       animated: setAnimated,
       isEink: setIsEink,
@@ -72,6 +108,15 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
       enableAnnotationQuickActions: setEnableAnnotationQuickActions,
       copyToNotebook: setCopyToNotebook,
     });
+    saveViewSettings(
+      envConfig,
+      bookKey,
+      'annotationToolbarItems',
+      DEFAULT_ANNOTATION_TOOLBAR_ITEMS,
+      false,
+      true,
+    );
+    pageTurnerResetRef.current();
   };
 
   useEffect(() => {
@@ -114,18 +159,6 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
   }, [scrollingOverlap]);
 
   useEffect(() => {
-    saveViewSettings(envConfig, bookKey, 'volumeKeysToFlip', volumeKeysToFlip, false, false);
-    if (appService?.isMobileApp) {
-      if (volumeKeysToFlip) {
-        acquireVolumeKeyInterception();
-      } else {
-        releaseVolumeKeyInterception();
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [volumeKeysToFlip]);
-
-  useEffect(() => {
     saveViewSettings(
       envConfig,
       bookKey,
@@ -141,6 +174,23 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     saveViewSettings(envConfig, bookKey, 'disableClick', isDisableClick, false, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDisableClick]);
+
+  // The renderer reads `turn-style`/`no-swipe` at touchmove/touchend time, so
+  // settings changes have to push the attributes through immediately rather
+  // than waiting for the next recreateViewer pass.
+  const applyTurnAttributes = () => {
+    const view = getView(bookKey);
+    const freshSettings = getViewSettings(bookKey);
+    if (view && freshSettings) {
+      applyPageTurnAttributes(view, freshSettings, !!bookData?.isFixedLayout);
+    }
+  };
+
+  useEffect(() => {
+    saveViewSettings(envConfig, bookKey, 'disableSwipe', isDisableSwipe, false, false);
+    applyTurnAttributes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDisableSwipe]);
 
   useEffect(() => {
     saveViewSettings(envConfig, bookKey, 'disableDoubleClick', isDisableDoubleClick, false, false);
@@ -164,8 +214,16 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     } else {
       getView(bookKey)?.renderer.removeAttribute('animated');
     }
+    // Mesh-curl eligibility depends on `animated`.
+    applyTurnAttributes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [animated]);
+
+  useEffect(() => {
+    saveViewSettings(envConfig, bookKey, 'pageTurnStyle', pageTurnStyle, false, false);
+    applyTurnAttributes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageTurnStyle]);
 
   useEffect(() => {
     saveViewSettings(envConfig, bookKey, 'isEink', isEink);
@@ -190,10 +248,23 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
   }, [autoScreenBrightness]);
 
   useEffect(() => {
+    if (swipeBrightnessGesture === settings.swipeBrightnessGesture) return;
+    saveSysSettings(envConfig, 'swipeBrightnessGesture', swipeBrightnessGesture);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [swipeBrightnessGesture]);
+
+  useEffect(() => {
     if (screenWakeLock === settings.screenWakeLock) return;
     saveSysSettings(envConfig, 'screenWakeLock', screenWakeLock);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenWakeLock]);
+
+  useEffect(() => {
+    if (autohideCursor === settings.autohideCursor) return;
+    saveSysSettings(envConfig, 'autohideCursor', autohideCursor);
+    getViews().forEach((view) => view?.toggleAttribute('autohide-cursor', autohideCursor));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autohideCursor]);
 
   useEffect(() => {
     if (viewSettings.allowScript === allowScript) return;
@@ -220,16 +291,41 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [copyToNotebook]);
 
+  const toggleAutoCheckUpdates = () => {
+    const newValue = !isAutoCheckUpdates;
+    saveSysSettings(envConfig, 'autoCheckUpdates', newValue);
+    setIsAutoCheckUpdates(newValue);
+  };
+
+  const toggleNightlyChannel = () => {
+    const newValue = !isNightlyChannel;
+    saveSysSettings(envConfig, 'updateChannel', newValue ? 'nightly' : 'stable');
+    setIsNightlyChannel(newValue);
+  };
+
+  const toggleTelemetry = () => {
+    const newValue = !isTelemetryEnabled;
+    saveSysSettings(envConfig, 'telemetryEnabled', newValue);
+    setIsTelemetryEnabled(newValue);
+    if (newValue) {
+      optInTelemetry();
+    } else {
+      optOutTelemetry();
+    }
+  };
+
   const getQuickActionOptions = () => {
     return [
       {
         value: '',
         label: _('None'),
       },
-      ...annotationToolQuickActions.map((button) => ({
-        value: button.type,
-        label: _(button.label),
-      })),
+      ...annotationToolQuickActions
+        .filter((button) => button.type !== 'share' || canShare)
+        .map((button) => ({
+          value: button.type,
+          label: _(button.label),
+        })),
     ];
   };
 
@@ -238,6 +334,15 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
     setAnnotationQuickAction(action);
     saveViewSettings(envConfig, bookKey, 'annotationQuickAction', action, false, true);
   };
+
+  if (showToolbarCustomizer) {
+    return (
+      <AnnotationToolbarCustomizer
+        bookKey={bookKey}
+        onBack={() => setShowToolbarCustomizer(false)}
+      />
+    );
+  }
 
   return (
     <div className='my-4 w-full space-y-6'>
@@ -281,6 +386,12 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
           onChange={() => setIsDisableClick(!isDisableClick)}
         />
         <SettingsSwitchRow
+          label={_('Swipe to Paginate')}
+          checked={!isDisableSwipe}
+          onChange={() => setIsDisableSwipe(!isDisableSwipe)}
+          data-setting-id='settings.control.swipeToPaginate'
+        />
+        <SettingsSwitchRow
           label={appService?.isMobileApp ? _('Tap Both Sides') : _('Click Both Sides')}
           checked={fullscreenClickArea}
           disabled={isDisableClick}
@@ -300,13 +411,6 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
           onChange={() => setIsDisableDoubleClick(!isDisableDoubleClick)}
           data-setting-id='settings.control.disableDoubleClick'
         />
-        {appService?.isMobileApp && (
-          <SettingsSwitchRow
-            label={_('Volume Keys for Page Flip')}
-            checked={volumeKeysToFlip}
-            onChange={() => setVolumeKeysToFlip(!volumeKeysToFlip)}
-          />
-        )}
         <SettingsSwitchRow
           label={_('Show Page Navigation Buttons')}
           checked={showPaginationButtons}
@@ -314,6 +418,13 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
           data-setting-id='settings.control.showPaginationButtons'
         />
       </BoxedList>
+
+      <PageTurnerSettings
+        bookKey={bookKey}
+        onRegisterReset={(fn) => {
+          pageTurnerResetRef.current = fn;
+        }}
+      />
 
       <BoxedList
         title={_('Annotation Tools')}
@@ -339,6 +450,11 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
           onChange={() => setCopyToNotebook(!copyToNotebook)}
           data-setting-id='settings.control.copyToNotebook'
         />
+        <NavigationRow
+          title={_('Customize Toolbar')}
+          onClick={() => setShowToolbarCustomizer(true)}
+          data-setting-id='settings.control.customizeToolbar'
+        />
       </BoxedList>
 
       <BoxedList title={_('Animation')} data-setting-id='settings.control.pagingAnimation'>
@@ -347,6 +463,19 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
           checked={animated}
           onChange={() => setAnimated(!animated)}
         />
+        <SettingsRow label={_('Animation Style')} data-setting-id='settings.control.pageTurnStyle'>
+          <SettingsSelect
+            // A synced slide/curl setting from another device still reads as
+            // push here when this engine cannot animate it.
+            value={
+              turnStyleOptions.some((opt) => opt.value === pageTurnStyle) ? pageTurnStyle : 'push'
+            }
+            onChange={(e) => setPageTurnStyle(e.target.value as PageTurnStyle)}
+            ariaLabel={_('Animation Style')}
+            options={turnStyleOptions}
+            disabled={!animated}
+          />
+        </SettingsRow>
       </BoxedList>
 
       <BoxedList title={_('Device')} data-setting-id='settings.control.device'>
@@ -374,13 +503,49 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
             onChange={() => setAutoScreenBrightness(!autoScreenBrightness)}
           />
         )}
+        {appService?.hasScreenBrightness && (
+          <SettingsSwitchRow
+            label={_('Swipe for Brightness')}
+            description={_('Slide along the left edge')}
+            checked={swipeBrightnessGesture}
+            onChange={() => setSwipeBrightnessGesture(!swipeBrightnessGesture)}
+            data-setting-id='settings.control.swipeBrightnessGesture'
+          />
+        )}
         <SettingsSwitchRow
           label={_('Keep Screen Awake')}
+          description={_('Only while reading')}
           checked={screenWakeLock}
           onChange={() => setScreenWakeLock(!screenWakeLock)}
           data-setting-id='settings.control.screenWakeLock'
         />
+        {!appService?.isMobile && (
+          <SettingsSwitchRow
+            label={_('Auto-hide Cursor')}
+            description={_('After a moment of inactivity')}
+            checked={autohideCursor}
+            onChange={() => setAutohideCursor(!autohideCursor)}
+            data-setting-id='settings.control.autohideCursor'
+          />
+        )}
       </BoxedList>
+
+      {appService?.hasUpdater && (
+        <BoxedList title={_('Update')} data-setting-id='settings.control.checkUpdates'>
+          <SettingsSwitchRow
+            label={_('Check Updates on Start')}
+            checked={isAutoCheckUpdates}
+            onChange={toggleAutoCheckUpdates}
+          />
+          <SettingsSwitchRow
+            label={_('Nightly Builds')}
+            description={isNightlyChannel ? _('Early daily builds') : ''}
+            checked={isNightlyChannel}
+            onChange={toggleNightlyChannel}
+            data-setting-id='settings.control.nightlyChannel'
+          />
+        </BoxedList>
+      )}
 
       <BoxedList title={_('Security')} data-setting-id='settings.control.allowJavascript'>
         <SettingsSwitchRow
@@ -389,6 +554,15 @@ const ControlPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterRes
           checked={allowScript}
           disabled={bookData?.book?.format !== 'EPUB'}
           onChange={() => setAllowScript(!allowScript)}
+        />
+      </BoxedList>
+
+      <BoxedList title={_('Privacy')} data-setting-id='settings.control.telemetry'>
+        <SettingsSwitchRow
+          label={_('Help improve Readest')}
+          description={isTelemetryEnabled ? _('Sharing anonymized statistics') : ''}
+          checked={isTelemetryEnabled}
+          onChange={toggleTelemetry}
         />
       </BoxedList>
     </div>

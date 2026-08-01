@@ -1,7 +1,13 @@
-import { Book, BooksGroup } from '@/types/book';
-import { LibraryGroupByType, LibrarySortByType } from '@/types/settings';
-import { formatAuthors, formatTitle } from '@/utils/book';
+import { Book, BooksGroup, ReadingStatus } from '@/types/book';
+import {
+  LibraryGroupByType,
+  LibrarySecondarySortByType,
+  LibrarySortByType,
+} from '@/types/settings';
+import { formatAuthors, formatTitle, isCurrentlyReadingBook } from '@/utils/book';
 import { md5Fingerprint } from '@/utils/md5';
+import { SIZE_PER_LOC, SIZE_PER_TIME_UNIT } from '@/services/constants';
+import { isFeedBook } from '@/services/rss/feedBookUrl';
 
 /** Valid sort types for the library */
 const VALID_SORT_TYPES: LibrarySortByType[] = Object.values(LibrarySortByType);
@@ -21,6 +27,65 @@ export const ensureLibrarySortByType = (
     return value as LibrarySortByType;
   }
   return fallback;
+};
+
+/**
+ * Safely cast a query parameter to LibrarySecondarySortByType with fallback.
+ * Accepts any valid primary sort type plus the literal 'none'.
+ */
+export const ensureLibrarySecondarySortByType = (
+  value: string | null | undefined,
+  fallback: LibrarySecondarySortByType,
+): LibrarySecondarySortByType => {
+  if (value === 'none') return 'none';
+  if (value && VALID_SORT_TYPES.includes(value as LibrarySortByType)) {
+    return value as LibrarySortByType;
+  }
+  return fallback;
+};
+
+/**
+ * Resolve the *effective* primary sort key, applying smart defaults derived
+ * from the current `groupBy`. The stored `librarySortBy` is left unchanged;
+ * this only substitutes a sensible implicit default when the user is still on
+ * auto, so grouping by Series lands an alphabetical-by-series-name listing
+ * without any extra clicks.
+ *
+ * - !isAuto                              -> use stored as-is
+ * - groupBy=Series and isAuto            -> Series
+ * - everything else                      -> stored
+ */
+export const resolveEffectivePrimarySort = (
+  stored: LibrarySortByType,
+  groupBy: LibraryGroupByType,
+  isAuto: boolean,
+): LibrarySortByType => {
+  if (!isAuto) return stored;
+  if (groupBy === LibraryGroupByType.Series) return LibrarySortByType.Series;
+  return stored;
+};
+
+/**
+ * Resolve the *effective* secondary sort key, applying smart defaults derived
+ * from the current `groupBy`. The stored secondary stays whatever the user
+ * picked; this only substitutes 'none' with a sensible implicit default so
+ * users get useful behavior out of the box (e.g. drilling into an Author
+ * group lands a series-ordered list without any extra clicks).
+ *
+ * - explicit secondary (any non-'none')  -> use as-is
+ * - groupBy=Author and stored='none'     -> Series
+ * - everything else                      -> 'none'
+ *
+ * groupBy=Series doesn't default to anything because `createWithinGroupSorter`
+ * already orders by `seriesIndex` for series groups.
+ */
+export const resolveEffectiveSecondarySort = (
+  secondary: LibrarySecondarySortByType,
+  groupBy: LibraryGroupByType,
+): LibrarySecondarySortByType => {
+  if (secondary !== 'none') return secondary;
+  if (groupBy === LibraryGroupByType.Author) return LibrarySortByType.Series;
+  return 'none';
 };
 
 /**
@@ -59,6 +124,38 @@ export const getGroupDisplayName = (
   return group?.displayName || group?.name;
 };
 
+/**
+ * Expand a list of selection ids (book hashes or group ids from the rendered
+ * bookshelf) into the unique book hashes those ids represent.
+ *
+ * Group ids resolve to every (non-soft-deleted) book in the group's visible
+ * rollup — `generateBookshelfItems` already folds nested-folder books into
+ * their top-level group, so the rendered `BooksGroup.books` is the source of
+ * truth. Standalone book hashes (and any unknown ids) pass through unchanged,
+ * letting callers like the bookshelf delete flow collect the right set up
+ * front instead of re-deriving it later.
+ */
+export const expandBookshelfSelection = (ids: string[], items: (Book | BooksGroup)[]): string[] => {
+  const hashes = new Set<string>();
+  for (const id of ids) {
+    const group = findGroupById(items, id);
+    if (group) {
+      for (const book of group.books) {
+        if (!book.deletedAt) hashes.add(book.hash);
+      }
+    } else {
+      hashes.add(id);
+    }
+  }
+  return [...hashes];
+};
+
+// Calibre custom column names and values, flattened for searching (#4811).
+const getCalibreColumnsText = (item: Book) =>
+  (item.metadata?.calibreColumns ?? [])
+    .map(({ name, value }) => `${name} ${Array.isArray(value) ? value.join(' ') : value}`)
+    .join(' ');
+
 export const createBookFilter = (queryTerm: string | null) => (item: Book) => {
   if (!queryTerm) return true;
   if (item.deletedAt) return false;
@@ -75,7 +172,9 @@ export const createBookFilter = (queryTerm: string | null) => (item: Book) => {
       authors.includes(lowerQuery) ||
       item.format.toLowerCase().includes(lowerQuery) ||
       (item.groupName && item.groupName.toLowerCase().includes(lowerQuery)) ||
-      (item.metadata?.description && item.metadata.description.toLowerCase().includes(lowerQuery))
+      (item.metadata?.description &&
+        item.metadata.description.toLowerCase().includes(lowerQuery)) ||
+      getCalibreColumnsText(item).toLowerCase().includes(lowerQuery)
     );
   }
   const title = formatTitle(item.title);
@@ -85,29 +184,115 @@ export const createBookFilter = (queryTerm: string | null) => (item: Book) => {
     searchTerm.test(authors) ||
     searchTerm.test(item.format) ||
     (item.groupName && searchTerm.test(item.groupName)) ||
-    (item.metadata?.description && searchTerm.test(item.metadata?.description))
+    (item.metadata?.description && searchTerm.test(item.metadata?.description)) ||
+    searchTerm.test(getCalibreColumnsText(item))
   );
 };
 
-export const createBookSorter = (sortBy: string, uiLanguage: string) => (a: Book, b: Book) => {
+/**
+ * Fraction of the book that has been read, in [0, 1]. `progress` is a 1-based
+ * `[current, total]` page pair; books that have never been opened have no
+ * progress and read 0 (they sort to the unread end).
+ */
+const getBookReadRatio = (book: Book): number => {
+  const [current, total] = book.progress ?? [];
+  if (!current || !total || total <= 0) return 0;
+  return current / total;
+};
+
+export const getTimeRemainingMinutes = (
+  book: Book,
+  medianPageDurationSecs?: number,
+): number | undefined => {
+  const pagesLeft = book.progress ? book.progress[1] - book.progress[0] : undefined;
+  if (!pagesLeft) return undefined;
+  return convertPagesToTimeRemainingMinutes(pagesLeft, medianPageDurationSecs);
+};
+
+export const convertPagesToTimeRemainingMinutes = (
+  pagesLeft: number,
+  medianPageDurationSecs?: number,
+): number => {
+  // Prefer the reader's own pace; fall back to the coarse global estimate.
+  const minutesPerPage = medianPageDurationSecs
+    ? medianPageDurationSecs / 60
+    : SIZE_PER_LOC / SIZE_PER_TIME_UNIT;
+  return Math.max(1, Math.round(pagesLeft * minutesPerPage));
+};
+
+/**
+ * Minutes a book still needs, or `undefined` when its tile shows no time at all.
+ * Finished, on-hold and unread books render a status badge instead of a time (see
+ * `ReadingProgress`), even when they still have pages left — so they have no time
+ * to sort by. Sorting and the label must agree on this, hence the shared helper.
+ */
+export const getDisplayedTimeRemaining = (
+  book: Book,
+  medianPageDurationSecs?: number,
+): number | undefined => {
+  const { readingStatus } = book;
+  if (readingStatus === 'finished' || readingStatus === 'abandoned' || readingStatus === 'unread') {
+    return undefined;
+  }
+  return getTimeRemainingMinutes(book, medianPageDurationSecs);
+};
+
+/**
+ * Remaining minutes for a shelf item, or `undefined` when its tile can show no
+ * time at all — that includes every group, since a group tile renders no progress.
+ */
+const getShelfItemTimeRemaining = (item: Book | BooksGroup): number | undefined =>
+  'books' in item ? undefined : getDisplayedTimeRemaining(item);
+
+/**
+ * Wrap a comparator that has *already* had the sort direction applied, so items
+ * with no remaining time always land after the ones that have it — ascending and
+ * descending alike. "No time" is a bucket, not a value: it must sit outside the
+ * sort-order multiplier, otherwise descending would float those items to the top.
+ */
+export const withTimeRemainingLast =
+  <T extends Book | BooksGroup>(sortBy: LibrarySortByType, compare: (a: T, b: T) => number) =>
+  (a: T, b: T): number => {
+    if (sortBy !== LibrarySortByType.TimeRemaining) return compare(a, b);
+    const aTime = getShelfItemTimeRemaining(a);
+    const bTime = getShelfItemTimeRemaining(b);
+    if (aTime === undefined && bTime === undefined) return 0;
+    if (aTime === undefined) return 1;
+    if (bTime === undefined) return -1;
+    return compare(a, b);
+  };
+
+const compareBookByKey = (a: Book, b: Book, sortBy: string, uiLanguage: string): number => {
   switch (sortBy) {
-    case LibrarySortByType.Title:
+    case LibrarySortByType.Title: {
       const aTitle = formatTitle(a.title);
       const bTitle = formatTitle(b.title);
       return aTitle.localeCompare(bTitle, uiLanguage || navigator.language);
-    case LibrarySortByType.Author:
+    }
+    case LibrarySortByType.Author: {
       const aAuthors = formatAuthors(a.author, a?.primaryLanguage || 'en', true);
       const bAuthors = formatAuthors(b.author, b?.primaryLanguage || 'en', true);
       return aAuthors.localeCompare(bAuthors, uiLanguage || navigator.language);
+    }
     case LibrarySortByType.Updated:
       return new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
     case LibrarySortByType.Created:
       return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
     case LibrarySortByType.Format:
       return a.format.localeCompare(b.format, uiLanguage || navigator.language);
-    case LibrarySortByType.Series:
+    case LibrarySortByType.Progress:
+      return getBookReadRatio(a) - getBookReadRatio(b);
+    case LibrarySortByType.Series: {
+      // Group by series name first so books of the same series stay consecutive,
+      // then order within a series by index. Comparing index alone would interleave
+      // series (all #1s, then all #2s) when this key is used as a secondary sort.
+      const aSeries = a.metadata?.series || '';
+      const bSeries = b.metadata?.series || '';
+      const bySeries = aSeries.localeCompare(bSeries, uiLanguage || navigator.language);
+      if (bySeries !== 0) return bySeries;
       return (a.metadata?.seriesIndex || 0) - (b.metadata?.seriesIndex || 0);
-    case LibrarySortByType.Published:
+    }
+    case LibrarySortByType.Published: {
       const aPublished = a.metadata?.published || '0001-01-01';
       const bPublished = b.metadata?.published || '0001-01-01';
 
@@ -128,9 +313,72 @@ export const createBookSorter = (sortBy: string, uiLanguage: string) => (a: Book
       if (isNaN(bDate)) return -1;
 
       return aDate - bDate;
+    }
+    case LibrarySortByType.TimeRemaining: {
+      const aTime = getDisplayedTimeRemaining(a);
+      const bTime = getDisplayedTimeRemaining(b);
+      // Never subtract two Infinities here: NaN makes the comparator inconsistent
+      // and Array.sort then scatters the no-time books through the shelf.
+      if (aTime === undefined && bTime === undefined) return 0;
+      if (aTime === undefined) return 1;
+      if (bTime === undefined) return -1;
+      return aTime - bTime;
+    }
     default:
       return new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
   }
+};
+
+/**
+ * @param secondarySortBy - Optional tiebreaker key applied when the primary
+ *   comparison returns 0. Pass `'none'` (or omit) to disable. A Series secondary
+ *   orders by series name then index; ties on both fall through to the primary tie.
+ */
+export const createBookSorter =
+  (sortBy: string, uiLanguage: string, secondarySortBy: LibrarySecondarySortByType = 'none') =>
+  (a: Book, b: Book): number => {
+    const primary = compareBookByKey(a, b, sortBy, uiLanguage);
+    if (primary !== 0 || secondarySortBy === 'none') return primary;
+    return compareBookByKey(a, b, secondarySortBy, uiLanguage);
+  };
+
+/**
+ * Pick the books for the recently-read shelf: most-recently-read first, capped
+ * at `count`. Only currently-reading books qualify (see `isCurrentlyReadingBook`):
+ * finished, abandoned and freshly-imported books are left off. Recency uses
+ * `updatedAt` (the library's "Updated" sort key) so the row matches the app's
+ * existing sort convention. NB: `updatedAt` is last-modified (also bumped by
+ * status/metadata edits and sync), not strictly last-read. Independent of the
+ * main shelf's sort/grouping — always a flat, recency slice.
+ */
+export const selectRecentShelfBooks = (books: Book[], count: number): Book[] => {
+  const byRecency = createBookSorter(LibrarySortByType.Updated, '');
+  return books
+    .filter(isCurrentlyReadingBook)
+    .sort((a, b) => -byRecency(a, b))
+    .slice(0, count);
+};
+
+/**
+ * Build a `groupName -> max(book.updatedAt)` map for all groups touched by
+ * the given books. Each book bumps both its direct group and every ancestor
+ * group along its path (e.g. a book in "Literature/Fiction" also bumps
+ * "Literature"), so parent groups don't sink just because their direct
+ * members are stale.
+ */
+export const buildGroupNameUpdatedAt = (books: Book[]): Map<string, number> => {
+  const map = new Map<string, number>();
+  for (const book of books) {
+    if (!book.groupName || !book.updatedAt) continue;
+    let path: string | undefined = book.groupName;
+    while (path) {
+      const prev = map.get(path) ?? 0;
+      if (book.updatedAt > prev) map.set(path, book.updatedAt);
+      const slash = path.lastIndexOf('/');
+      path = slash === -1 ? undefined : path.slice(0, slash);
+    }
+  }
+  return map;
 };
 
 export const getBreadcrumbs = (currentPath: string) => {
@@ -271,10 +519,14 @@ const createAuthorGroups = (books: Book[]): (Book | BooksGroup)[] => {
 /**
  * Create a sorter for books within a group.
  * For series groups: sort by seriesIndex first (always ascending), then by global sort for items without index.
- * For author groups: follow global sort setting.
- * @param sortAscending - When true (default), sort direction is ascending. Series index is always
- *   ascending regardless of this flag; the flag only affects the fallback sort for books without
- *   series index and non-series groupings.
+ * For other groupings: when a secondary key is supplied, sort by secondary key first (always ascending),
+ *   with the primary global sort as tiebreaker. Without secondary, follow global sort setting.
+ * @param sortAscending - When true (default), sort direction is ascending. Series index and the
+ *   secondary key are always ascending regardless of this flag; the flag affects the fallback /
+ *   primary tiebreaker only.
+ * @param secondarySortBy - When non-'none', acts as the *primary* within-group ordering for
+ *   non-series groupings (matches the user's mental model: "group by author, then sort by series"
+ *   should land series order inside each author).
  */
 export const createWithinGroupSorter =
   (
@@ -282,6 +534,7 @@ export const createWithinGroupSorter =
     sortBy: LibrarySortByType,
     uiLanguage: string,
     sortAscending: boolean = true,
+    secondarySortBy: LibrarySecondarySortByType = 'none',
   ) =>
   (a: Book, b: Book): number => {
     const sortDirection = sortAscending ? 1 : -1;
@@ -303,7 +556,14 @@ export const createWithinGroupSorter =
       return createBookSorter(sortBy, uiLanguage)(a, b) * sortDirection;
     }
 
-    // For author and other groupings, use global sort with direction
+    // For author and other non-series groupings: when a secondary key is provided,
+    // use it as the within-group primary order with the global key as tiebreaker.
+    if (secondarySortBy !== 'none') {
+      const bySecondary = compareBookByKey(a, b, secondarySortBy, uiLanguage);
+      if (bySecondary !== 0) return bySecondary;
+      return createBookSorter(sortBy, uiLanguage)(a, b) * sortDirection;
+    }
+
     return createBookSorter(sortBy, uiLanguage)(a, b) * sortDirection;
   };
 
@@ -327,12 +587,19 @@ export const getBookSortValue = (book: Book, sortBy: LibrarySortByType): number 
     case LibrarySortByType.Format:
       return book.format;
 
+    case LibrarySortByType.Progress:
+      return getBookReadRatio(book);
+
     case LibrarySortByType.Published: {
       const published = book.metadata?.published;
       if (!published) return 0;
       const publishedTime = new Date(published).getTime();
       return isNaN(publishedTime) ? 0 : publishedTime;
     }
+
+    case LibrarySortByType.TimeRemaining:
+      // Return Infinity if a book does not have time remaining (ie. if the book is unread or finished) so it is sorted after books with time remaining
+      return getTimeRemainingMinutes(book) ?? Infinity;
 
     default:
       return book.updatedAt;
@@ -386,6 +653,10 @@ export const getGroupSortValue = (
       // Return the most recent createdAt
       return Math.max(...books.map((b) => b.createdAt));
 
+    case LibrarySortByType.Progress:
+      // Return the most-progressed book's read ratio
+      return Math.max(...books.map((b) => getBookReadRatio(b)));
+
     case LibrarySortByType.Published: {
       // Return the most recent published date
       const publishedDates = books
@@ -396,6 +667,10 @@ export const getGroupSortValue = (
 
       return publishedDates.length > 0 ? Math.max(...publishedDates) : 0;
     }
+
+    case LibrarySortByType.TimeRemaining:
+      // Return book with least amount of time remaining
+      return Math.min(...books.map((b) => getTimeRemainingMinutes(b) ?? Infinity));
 
     default:
       return Math.max(...books.map((b) => b.updatedAt));
@@ -444,3 +719,124 @@ export const createGroupSorter =
 
     return 0;
   };
+
+export type BookContextMenuItemId =
+  | 'select'
+  | 'group'
+  | 'markFinished'
+  | 'markUnread'
+  | 'markAbandoned'
+  | 'clearStatus'
+  | 'showDetails'
+  | 'showInFinder'
+  | 'searchGoodreads'
+  | 'download'
+  | 'upload'
+  | 'share'
+  | 'delete';
+
+/**
+ * Build a new Book with an explicit reading status. Stamps both `updatedAt`
+ * (so the library sync picks it up) and `readingStatusUpdatedAt` (so the
+ * field-level merge resolves status independently of progress). Use this for
+ * every deliberate status edit so the timestamp is never forgotten.
+ */
+export const withReadingStatus = (book: Book, status: ReadingStatus | undefined): Book => {
+  const now = Date.now();
+  return { ...book, readingStatus: status, readingStatusUpdatedAt: now, updatedAt: now };
+};
+
+type ReadingStatusFields = Pick<Book, 'readingStatus' | 'readingStatusUpdatedAt'>;
+
+/**
+ * Field-level last-writer-wins for reading status: return whichever side's
+ * status was set more recently (ties → `a`). Missing timestamp = epoch 0.
+ * The book row's `updatedAt` is dominated by page-turn progress, so status
+ * must be resolved by its own timestamp or progress would clobber it.
+ */
+export const pickFresherReadingStatus = (
+  a: ReadingStatusFields,
+  b: ReadingStatusFields,
+): ReadingStatusFields => {
+  const at = (x: ReadingStatusFields) => x.readingStatusUpdatedAt ?? 0;
+  const winner = at(a) >= at(b) ? a : b;
+  return {
+    readingStatus: winner.readingStatus,
+    readingStatusUpdatedAt: winner.readingStatusUpdatedAt,
+  };
+};
+
+type CoverFields = Pick<Book, 'coverHash' | 'coverUpdatedAt'>;
+type CoverSyncFields = Pick<
+  Book,
+  'coverHash' | 'coverUpdatedAt' | 'coverDownloadedAt' | 'deletedAt' | 'uploadedAt'
+>;
+
+const coverMs = (t?: number | null) => t ?? 0;
+
+/**
+ * Decide whether a peer should (re)download a book's cover from the cloud
+ * (issue #4544). True when the synced book is in the cloud AND either:
+ *  - this device has never fetched the cover (first download), or
+ *  - a newer cover edit exists (synced `coverUpdatedAt` strictly newer) whose
+ *    content hash differs from the local one.
+ *
+ * Gating on `coverUpdatedAt` (not just the hash) prevents two failure modes:
+ *  - churn: once a device adopts the synced `coverUpdatedAt` after downloading,
+ *    the comparison stops firing on every subsequent sync;
+ *  - the unpushed-local-edit race: a device that just edited its cover (newer
+ *    local `coverUpdatedAt`) is not made to overwrite it with the stale cloud
+ *    copy before its own push lands.
+ */
+export const needsCoverRefresh = (local: CoverSyncFields, synced: CoverSyncFields): boolean => {
+  if (synced.deletedAt || !synced.uploadedAt) return false;
+  if (!local.coverDownloadedAt) return true; // first download
+  if (!synced.coverHash) return false; // nothing to compare (legacy book)
+  if (coverMs(synced.coverUpdatedAt) <= coverMs(local.coverUpdatedAt)) return false;
+  return synced.coverHash !== local.coverHash;
+};
+
+/**
+ * Field-level last-writer-wins for the cover, by `coverUpdatedAt` (ties →
+ * `local`, which already holds the file). Mirrors {@link pickFresherReadingStatus}:
+ * the row's `updatedAt` is dominated by page-turn progress, so the cover must be
+ * resolved by its own timestamp or progress would clobber a cover edit.
+ */
+export const pickFresherCover = (local: CoverFields, synced: CoverFields): CoverFields =>
+  coverMs(synced.coverUpdatedAt) > coverMs(local.coverUpdatedAt)
+    ? { coverHash: synced.coverHash, coverUpdatedAt: synced.coverUpdatedAt }
+    : { coverHash: local.coverHash, coverUpdatedAt: local.coverUpdatedAt };
+
+/**
+ * Resolve the ordered list of context-menu item ids for a book from its state.
+ *
+ * The native menu MUST be built from this list in a single `Menu.new({ items })`
+ * call. Appending items one at a time with un-awaited `Menu.append()` promises
+ * races on the Tauri IPC boundary, so the items land in a non-deterministic
+ * order and the menu appears to shuffle on every open (issue #4389).
+ */
+export const getBookContextMenuItemIds = (book: Book): BookContextMenuItemId[] => {
+  const ids: BookContextMenuItemId[] = ['select', 'group'];
+  ids.push(book.readingStatus === 'finished' ? 'markUnread' : 'markFinished');
+  if (book.readingStatus !== 'abandoned') ids.push('markAbandoned');
+  // "Clear Status" is offered only when the book has an explicit status set.
+  if (
+    book.readingStatus === 'finished' ||
+    book.readingStatus === 'unread' ||
+    book.readingStatus === 'abandoned'
+  ) {
+    ids.push('clearStatus');
+  }
+  ids.push('showDetails', 'showInFinder', 'searchGoodreads');
+  // A feed book has no file to move: every transfer action would fail, and the
+  // share dialog uploads before it can hand out a link (issue #5307).
+  if (!isFeedBook(book)) {
+    if (book.uploadedAt && !book.downloadedAt) ids.push('download');
+    if (!book.uploadedAt && book.downloadedAt) ids.push('upload');
+    // Share is offered for any local-or-uploaded book; the dialog uploads first
+    // if the book hasn't been pushed yet.
+    if (book.downloadedAt || book.uploadedAt) ids.push('share');
+  }
+  ids.push('delete');
+  return ids;
+};

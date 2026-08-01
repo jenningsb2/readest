@@ -149,7 +149,7 @@ export const groupResultsByCategory = (
 const panelIcons: Record<SettingsPanelType, IconType> = {
   Font: RiFontSize,
   Layout: RiDashboardLine,
-  Color: VscSymbolColor,
+  Theme: VscSymbolColor,
   Control: LiaHandPointerSolid,
   TTS: PiSpeakerHigh,
   Language: RiTranslate,
@@ -292,8 +292,8 @@ const layoutPanelItems = [
   },
   {
     id: 'settings.layout.pageGap',
-    labelKey: _('Column Gap (%)'),
-    keywords: ['page', 'gap', 'spacing', 'gutter'],
+    labelKey: _('Additional Margin (%)'),
+    keywords: ['page', 'margin', 'additional', 'gap', 'spacing', 'gutter', 'column'],
     section: 'Page',
   },
   {
@@ -382,6 +382,12 @@ const colorPanelItems = [
     id: 'settings.tts.mediaMetadata',
     labelKey: _('TTS Media Info Update Frequency'),
     keywords: ['tts', 'media', 'metadata', 'bluetooth', 'notification', 'chapter', 'paragraph'],
+    section: 'TTS',
+  },
+  {
+    id: 'settings.tts.playerStyle',
+    labelKey: _('TTS Player Style'),
+    keywords: ['tts', 'player', 'mini', 'style', 'cover', 'full', 'minimal'],
     section: 'TTS',
   },
   {
@@ -491,6 +497,12 @@ const controlPanelItems = [
     section: 'Device',
   },
   {
+    id: 'settings.control.autohideCursor',
+    labelKey: _('Auto-hide Cursor'),
+    keywords: ['cursor', 'mouse', 'pointer', 'hide', 'autohide', 'idle'],
+    section: 'Device',
+  },
+  {
     id: 'settings.control.allowJavascript',
     labelKey: _('Allow JavaScript'),
     keywords: ['javascript', 'js', 'script', 'security', 'allow'],
@@ -582,6 +594,24 @@ const aiPanelItems = [
     keywords: ['gateway', 'model', 'openai', 'gpt', 'claude'],
     section: 'AI Gateway',
   },
+  {
+    id: 'settings.ai.openrouterApiKey',
+    labelKey: _('OpenRouter API Key'),
+    keywords: ['openrouter', 'api', 'key', 'token', 'secret'],
+    section: 'OpenRouter',
+  },
+  {
+    id: 'settings.ai.openrouterBaseUrl',
+    labelKey: _('OpenRouter Base URL'),
+    keywords: ['openrouter', 'base', 'url', 'endpoint', 'openai', 'compatible'],
+    section: 'OpenRouter',
+  },
+  {
+    id: 'settings.ai.openrouterModel',
+    labelKey: _('OpenRouter Model'),
+    keywords: ['openrouter', 'model', 'claude', 'gpt', 'llama', 'deepseek'],
+    section: 'OpenRouter',
+  },
 ];
 
 // custom panel items
@@ -622,11 +652,6 @@ const actionItems = [
     keywords: ['screen', 'wake', 'lock', 'awake', 'sleep', 'display'],
   },
   {
-    id: 'action.autoUpload',
-    labelKey: _('Auto Upload Books to Cloud'),
-    keywords: ['auto', 'upload', 'cloud', 'sync', 'backup'],
-  },
-  {
     id: 'action.reload',
     labelKey: _('Reload Page'),
     keywords: ['reload', 'refresh', 'page'],
@@ -655,7 +680,6 @@ export interface CommandRegistryOptions {
   toggleFullscreen: () => void;
   toggleAlwaysOnTop: () => void;
   toggleScreenWakeLock: () => void;
-  toggleAutoUpload: () => void;
   reloadPage: () => void;
   toggleOpenLastBooks: () => void;
   showAbout: () => void;
@@ -698,7 +722,7 @@ export const buildCommandRegistry = (options: CommandRegistryOptions): CommandIt
 
   // add color panel items
   for (const def of colorPanelItems) {
-    items.push(createSettingsItem(def, 'Color'));
+    items.push(createSettingsItem(def, 'Theme'));
   }
 
   // add control panel items
@@ -777,13 +801,6 @@ export const buildCommandRegistry = (options: CommandRegistryOptions): CommandIt
     createActionItem({
       id: 'action.screenWakeLock',
       action: options.toggleScreenWakeLock,
-    }),
-  );
-
-  items.push(
-    createActionItem({
-      id: 'action.autoUpload',
-      action: options.toggleAutoUpload,
     }),
   );
 

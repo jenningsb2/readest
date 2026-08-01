@@ -2,11 +2,12 @@
 
 import { useMemo, useCallback } from 'react';
 import { VirtuosoGrid } from 'react-virtuoso';
-import { IoChevronBack, IoChevronForward, IoFilter } from 'react-icons/io5';
+import { IoAdd, IoChevronBack, IoChevronForward, IoFilter } from 'react-icons/io5';
 import { useTranslation } from '@/hooks/useTranslation';
 import { OPDSFeed, OPDSGenericLink } from '@/types/opds';
 import { PublicationCard } from './PublicationCard';
 import { NavigationCard } from './NavigationCard';
+import { GroupCarousel } from './GroupCarousel';
 import { groupByArray } from '../utils/opdsUtils';
 
 interface FeedViewProps {
@@ -17,6 +18,7 @@ interface FeedViewProps {
   onPublicationSelect: (groupIndex: number, itemIndex: number) => void;
   onGenerateCachedImageUrl: (url: string) => Promise<string>;
   isOPDSCatalog: (type?: string) => boolean;
+  onAddCatalog?: () => void;
 }
 
 const gridClassName = 'grid grid-cols-3 gap-4 px-4 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6';
@@ -30,6 +32,7 @@ export function FeedView({
   onNavigate,
   onPublicationSelect,
   onGenerateCachedImageUrl,
+  onAddCatalog,
 }: FeedViewProps) {
   const _ = useTranslation();
   const linksByRel = useMemo(() => groupByArray(feed.links, (link) => link.rel), [feed.links]);
@@ -39,6 +42,11 @@ export function FeedView({
   }, [linksByRel]);
 
   const hasFacets = feed.facets && feed.facets.length > 0;
+
+  // When a feed lists several groups, full grids make scrolling past them
+  // tedious. Render each group as a compact horizontal carousel instead so the
+  // page stays short and groups are easy to skim (readest issue #4750).
+  const useCarousel = (feed.groups?.length ?? 0) >= 2;
 
   const handlePaginationClick = (links?: OPDSGenericLink[]) => {
     if (links && links.length > 0) {
@@ -80,9 +88,20 @@ export function FeedView({
         {hasFacets && (
           <aside className='hidden w-64 flex-shrink-0 overflow-y-auto lg:block'>
             <div className='px-4'>
+              {onAddCatalog && (
+                <div className='mb-4'>
+                  <button
+                    onClick={onAddCatalog}
+                    className='btn btn-primary btn-sm w-full flex items-center justify-center gap-2'
+                  >
+                    <IoAdd className='h-4 w-4' />
+                    {_('Add to My Catalogs')}
+                  </button>
+                </div>
+              )}
               <div className='mb-4 flex items-center gap-2'>
                 <IoFilter className='h-5 w-5' />
-                <h2 className='text-lg font-semibold'>Filters</h2>
+                <h2 className='text-lg font-semibold'>{_('Filters')}</h2>
               </div>
               <div className='space-y-6'>
                 {feed.facets?.map((facet, index: number) => (
@@ -159,10 +178,14 @@ export function FeedView({
 
           {/* Groups */}
           {feed.groups?.map((group, groupIndex: number) => (
-            <section key={groupIndex} className='mb-12 flex-shrink-0'>
+            <section key={groupIndex} className={`flex-shrink-0 ${useCarousel ? 'mb-6' : 'mb-12'}`}>
               {group.metadata && (
-                <div className='mb-4 flex items-center justify-between px-4'>
-                  <h2 className='text-2xl font-bold'>{group.metadata.title}</h2>
+                <div
+                  className={`flex items-center justify-between px-4 ${useCarousel ? 'mb-2' : 'mb-4'}`}
+                >
+                  <h2 className={useCarousel ? 'text-lg font-bold' : 'text-2xl font-bold'}>
+                    {group.metadata.title}
+                  </h2>
                   {group.links && group.links.length > 0 && (
                     <button
                       onClick={() => {
@@ -178,34 +201,68 @@ export function FeedView({
                 </div>
               )}
 
-              {group.navigation && (
-                <div className={`opds-navigation ${gridClassName}`}>
-                  {group.navigation.map((item, itemIndex: number) => (
-                    <NavigationCard
-                      key={itemIndex}
-                      item={item}
-                      baseURL={baseURL}
-                      onClick={handleNavigationClick}
-                      resolveURL={resolveURL}
-                    />
-                  ))}
-                </div>
-              )}
+              {group.navigation &&
+                (useCarousel ? (
+                  <GroupCarousel
+                    count={group.navigation.length}
+                    defaultRowHeight={80}
+                    itemContent={(itemIndex) => (
+                      <div data-carousel-item className='w-64 pr-4'>
+                        <NavigationCard
+                          item={group.navigation![itemIndex]!}
+                          baseURL={baseURL}
+                          onClick={handleNavigationClick}
+                          resolveURL={resolveURL}
+                        />
+                      </div>
+                    )}
+                  />
+                ) : (
+                  <div className={`opds-navigation ${gridClassName}`}>
+                    {group.navigation.map((item, itemIndex: number) => (
+                      <NavigationCard
+                        key={itemIndex}
+                        item={item}
+                        baseURL={baseURL}
+                        onClick={handleNavigationClick}
+                        resolveURL={resolveURL}
+                      />
+                    ))}
+                  </div>
+                ))}
 
-              {group.publications && (
-                <div className={`opds-publications ${gridClassName}`}>
-                  {group.publications.map((pub, itemIndex: number) => (
-                    <PublicationCard
-                      key={itemIndex}
-                      publication={pub}
-                      baseURL={baseURL}
-                      onClick={() => onPublicationSelect(groupIndex, itemIndex)}
-                      resolveURL={resolveURL}
-                      onGenerateCachedImageUrl={onGenerateCachedImageUrl}
-                    />
-                  ))}
-                </div>
-              )}
+              {group.publications &&
+                (useCarousel ? (
+                  <GroupCarousel
+                    count={group.publications.length}
+                    defaultRowHeight={250}
+                    coverCentered
+                    itemContent={(itemIndex) => (
+                      <div data-carousel-item className='w-32 pr-4'>
+                        <PublicationCard
+                          publication={group.publications![itemIndex]!}
+                          baseURL={baseURL}
+                          onClick={() => onPublicationSelect(groupIndex, itemIndex)}
+                          resolveURL={resolveURL}
+                          onGenerateCachedImageUrl={onGenerateCachedImageUrl}
+                        />
+                      </div>
+                    )}
+                  />
+                ) : (
+                  <div className={`opds-publications ${gridClassName}`}>
+                    {group.publications.map((pub, itemIndex: number) => (
+                      <PublicationCard
+                        key={itemIndex}
+                        publication={pub}
+                        baseURL={baseURL}
+                        onClick={() => onPublicationSelect(groupIndex, itemIndex)}
+                        resolveURL={resolveURL}
+                        onGenerateCachedImageUrl={onGenerateCachedImageUrl}
+                      />
+                    ))}
+                  </div>
+                ))}
             </section>
           ))}
 

@@ -22,6 +22,8 @@ beforeEach(() => {
     backKeyIntercepted: false,
     volumeKeysInterceptionCount: 0,
     backKeyInterceptionCount: 0,
+    pageTurnerKeysIntercepted: false,
+    pageTurnerKeysInterceptionCount: 0,
   });
   vi.clearAllMocks();
   // Clean up window handlers
@@ -188,6 +190,26 @@ describe('deviceStore', () => {
     });
   });
 
+  describe('syncScreenBrightness', () => {
+    test('records what the device currently reports', async () => {
+      const { getScreenBrightness } = await import('@/utils/bridge');
+      vi.mocked(getScreenBrightness).mockResolvedValue({ brightness: 0.3 });
+
+      useDeviceControlStore.setState({ lastScreenBrightness: 0.9 });
+      await useDeviceControlStore.getState().syncScreenBrightness();
+      expect(useDeviceControlStore.getState().lastScreenBrightness).toBe(0.3);
+    });
+
+    test('records null when the device reports no app override', async () => {
+      const { getScreenBrightness } = await import('@/utils/bridge');
+      vi.mocked(getScreenBrightness).mockResolvedValue({ brightness: -1 });
+
+      useDeviceControlStore.setState({ lastScreenBrightness: 0.9 });
+      await useDeviceControlStore.getState().syncScreenBrightness();
+      expect(useDeviceControlStore.getState().lastScreenBrightness).toBeNull();
+    });
+  });
+
   // ── Native touch events ────────────────────────────────────────
   describe('listenToNativeTouchEvents', () => {
     test('sets window.onNativeTouch handler', () => {
@@ -222,6 +244,73 @@ describe('deviceStore', () => {
       expect(state.backKeyIntercepted).toBe(false);
       expect(state.volumeKeysInterceptionCount).toBe(0);
       expect(state.backKeyInterceptionCount).toBe(0);
+    });
+  });
+
+  // ── Page turner key interception ───────────────────────────────
+  describe('page turner key interception', () => {
+    test('acquire sets state and intercepts page turner keys', async () => {
+      const { interceptKeys } = await import('@/utils/bridge');
+      useDeviceControlStore.getState().acquirePageTurnerKeyInterception();
+
+      expect(useDeviceControlStore.getState().pageTurnerKeysIntercepted).toBe(true);
+      expect(useDeviceControlStore.getState().pageTurnerKeysInterceptionCount).toBe(1);
+      expect(interceptKeys).toHaveBeenCalledWith({ pageTurnerKeys: true });
+    });
+
+    test('release after single acquire stops interception', async () => {
+      const { interceptKeys } = await import('@/utils/bridge');
+      useDeviceControlStore.getState().acquirePageTurnerKeyInterception();
+      useDeviceControlStore.getState().releasePageTurnerKeyInterception();
+
+      expect(useDeviceControlStore.getState().pageTurnerKeysIntercepted).toBe(false);
+      expect(useDeviceControlStore.getState().pageTurnerKeysInterceptionCount).toBe(0);
+      expect(interceptKeys).toHaveBeenCalledWith({ pageTurnerKeys: false });
+    });
+
+    test('second acquire increments count without re-intercepting', async () => {
+      const { interceptKeys } = await import('@/utils/bridge');
+      useDeviceControlStore.getState().acquirePageTurnerKeyInterception();
+      useDeviceControlStore.getState().acquirePageTurnerKeyInterception();
+
+      expect(useDeviceControlStore.getState().pageTurnerKeysInterceptionCount).toBe(2);
+      expect(interceptKeys).toHaveBeenCalledTimes(1);
+    });
+
+    test('setKeyLearnMode toggles learn mode through the bridge', async () => {
+      const { interceptKeys } = await import('@/utils/bridge');
+      useDeviceControlStore.getState().setKeyLearnMode(true);
+      expect(interceptKeys).toHaveBeenCalledWith({ learnMode: true });
+
+      useDeviceControlStore.getState().setKeyLearnMode(false);
+      expect(interceptKeys).toHaveBeenCalledWith({ learnMode: false });
+    });
+  });
+
+  // ── Native key forwarding ──────────────────────────────────────
+  describe('handleNativeKeyDown forwarding', () => {
+    test('forwards a media key through the native-key-down event', async () => {
+      const { eventDispatcher } = await import('@/utils/event');
+      useDeviceControlStore.getState().acquirePageTurnerKeyInterception();
+
+      window.onNativeKeyDown?.('MediaNext', 87);
+
+      expect(eventDispatcher.dispatch).toHaveBeenCalledWith('native-key-down', {
+        keyName: 'MediaNext',
+        keyCode: 87,
+      });
+    });
+
+    test('forwards the Back key synchronously', async () => {
+      const { eventDispatcher } = await import('@/utils/event');
+      useDeviceControlStore.getState().acquirePageTurnerKeyInterception();
+
+      window.onNativeKeyDown?.('Back', 4);
+
+      expect(eventDispatcher.dispatchSync).toHaveBeenCalledWith('native-key-down', {
+        keyName: 'Back',
+        keyCode: 4,
+      });
     });
   });
 });

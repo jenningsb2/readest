@@ -13,11 +13,16 @@ export const sanitizerTransformer: Transformer = {
     const allowScript = ctx.viewSettings.allowScript;
     if (allowScript) return ctx.content;
 
+    // Protect BiDi control characters that XMLSerializer encodes as numeric
+    // character references, breaking Persian/Arabic text shaping. Both the
+    // literal character and its numeric-entity form (produced by XMLSerializer)
+    // must be restored to the literal after serialization, just like U+00A0.
     const result = ctx.content.replaceAll('&nbsp;', '&#160;');
 
     const sanitized = DOMPurify.sanitize(result, {
       WHOLE_DOCUMENT: true,
-      FORBID_TAGS: ['script'],
+      FORBID_TAGS: ['script', 'iframe', 'object', 'embed'],
+      FORBID_ATTR: ['srcdoc'],
       ALLOWED_URI_REGEXP:
         /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|blob|data):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
       ADD_TAGS: ['link', 'meta'],
@@ -33,6 +38,7 @@ export const sanitizerTransformer: Transformer = {
           'data-wr-footernote', // custom attribute for weread footnotes
           'zy-footnote', // custom attribute for zhangyue footnotes
           'cfi-inert', // custom attribute to mark nodes as inert for CFI processing
+          'cfi-skip', // custom attribute to mark nodes to be skipped in CFI processing
         ];
         return (
           attrWhitelist.includes(attributeName) ||
@@ -46,7 +52,13 @@ export const sanitizerTransformer: Transformer = {
 
     const serializer = new XMLSerializer();
     let serialized = serializer.serializeToString(sanitized);
-    serialized = serialized.replaceAll('&#160;', '&nbsp;').replaceAll('\u00A0', '&nbsp;');
+    serialized = serialized
+      .replaceAll('&#160;', '&nbsp;')
+      .replaceAll('\u00A0', '&nbsp;')
+      .replaceAll('&#x200e;', '\u200E')
+      .replaceAll('&#8206;', '\u200E')
+      .replaceAll('&#x200f;', '\u200F')
+      .replaceAll('&#8207;', '\u200F');
     serialized = '<?xml version="1.0" encoding="utf-8"?>' + DOCTYPE_XHTML11 + serialized;
     serialized = serialized.replace(/(<head[^>]*>)/i, '\n$1');
     serialized = serialized.replace(/(<\/body>)(<\/html>)/i, '$1\n$2');

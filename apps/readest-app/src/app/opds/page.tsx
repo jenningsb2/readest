@@ -13,21 +13,28 @@ import { downloadFile } from '@/libs/storage';
 import { Toast } from '@/components/Toast';
 import { useThemeStore } from '@/store/themeStore';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useKeyDownActions } from '@/hooks/useKeyDownActions';
 import { useLibraryStore } from '@/store/libraryStore';
 import { useSettingsStore } from '@/store/settingsStore';
+import { useCustomOPDSStore } from '@/store/customOPDSStore';
 import { transferManager } from '@/services/transferManager';
+import { isReadestCloudStorageActive } from '@/services/sync/cloudSyncProvider';
 import { useTransferQueue } from '@/hooks/useTransferQueue';
 import { useTheme } from '@/hooks/useTheme';
 import { useLibrary } from '@/hooks/useLibrary';
 import { eventDispatcher } from '@/utils/event';
 import { navigateToReader } from '@/utils/nav';
 import { getFileExtFromMimeType } from '@/libs/document';
-import { OPDSFeed, OPDSPublication, OPDSSearch } from '@/types/opds';
+import { OPDSFeed, OPDSPublication, OPDSSearch, REL } from '@/types/opds';
 import {
+  expandOPDSSearchTemplate,
   getFileExtFromPath,
+  getSafeDOMParserMimeType,
   isSearchLink,
+  looksLikeXMLContent,
   MIME,
   parseMediaType,
+  parseOPDSXML,
   resolveURL,
 } from './utils/opdsUtils';
 import {
@@ -37,15 +44,21 @@ import {
   needsProxy,
   probeFilename,
 } from './utils/opdsReq';
+import { getPublicationDetailHref, parsePublicationDocument } from './utils/opdsPublication';
 import { ImportError } from '@/services/errors';
 import { READEST_OPDS_USER_AGENT } from '@/services/constants';
+import { findBookByOPDSSources, upsertOPDSSourceMapping } from '@/services/opds/sourceMap';
 import { buildPseStreamFileName } from '@/services/opds/pseStream';
+import type { Book } from '@/types/book';
 import { FeedView } from './components/FeedView';
 import { PublicationView } from './components/PublicationView';
 import { SearchView } from './components/SearchView';
 import { Navigation } from './components/Navigation';
 import { normalizeOPDSCustomHeaders } from './utils/customHeaders';
-import { stashOPDSReturnTarget } from './utils/opdsClose';
+import { closeOPDSBrowser, stashOPDSReturnTarget } from './utils/opdsClose';
+import { findExistingBookForPublication } from './utils/findExistingBook';
+import Dialog from '@/components/Dialog';
+import { uniqueId } from '@/utils/misc';
 
 type ViewMode = 'feed' | 'publication' | 'search' | 'loading' | 'error';
 
@@ -68,9 +81,13 @@ interface HistoryEntry {
 export default function BrowserPage() {
   const _ = useTranslation();
   const router = useRouter();
-  const { appService } = useEnv();
+  const { appService, envConfig } = useEnv();
   const { user } = useAuth();
   const { libraryLoaded } = useLibrary();
+  // Subscribe to library so the publication detail page can detect copies
+  // already imported (shown as "Open & Read" instead of "Download"), and
+  // re-evaluate whenever a download finishes or a book is removed.
+  const library = useLibraryStore((s) => s.library);
   const { safeAreaInsets, isRoundedWindow } = useThemeStore();
   const { settings } = useSettingsStore();
   const [viewMode, setViewMode] = useState<ViewMode>('loading');
@@ -86,10 +103,29 @@ export default function BrowserPage() {
   const [error, setError] = useState<Error | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const [showAddCatalog, setShowAddCatalog] = useState(false);
+  const [newCatalogName, setNewCatalogName] = useState('');
 
   const searchParams = useSearchParams();
   const catalogUrl = searchParams?.get('url') || '';
   const catalogId = searchParams?.get('id') || '';
+  const catalog = settings.opdsCatalogs?.find((catalog) => catalog.id === catalogId);
+  const catalogSourceId = catalog?.contentId || catalogId || catalogUrl;
+  // Captured once at mount so the restore effect targets exactly the
+  // detail the URL described when /opds first loaded — typically after a
+  // Reader → webview-back. Subsequent in-page navigation can mutate the
+  // `pub` query param via handleBack/handlePublicationSelect without
+  // re-triggering restoration.
+  const initialPubMarkerRef = useRef<string | null>(searchParams?.get('pub') ?? null);
+  const didRestorePubRef = useRef(false);
+  // Remembers the (url,id) pair that the mount-load effect has already
+  // kicked off a fetch for. Without this, any unrelated change to the
+  // `settings` zustand store re-runs the effect, re-fetches the same
+  // feed, resets viewMode to 'feed', and clobbers a publication detail
+  // that the restore effect just brought back. Tracking the pair lets us
+  // ignore those spurious re-runs while still honoring genuine URL/id
+  // changes (e.g. an in-page navigation that mutates `catalogUrl`).
+  const lastLoadedKeyRef = useRef<string | null>(null);
   const usernameRef = useRef<string | null | undefined>(undefined);
   const passwordRef = useRef<string | null | undefined>(undefined);
   const customHeadersRef = useRef<Record<string, string>>({});
@@ -216,8 +252,8 @@ export default function BrowserPage() {
         const responseURL = res.url;
         const text = await res.text();
 
-        if (text.startsWith('<')) {
-          const doc = new DOMParser().parseFromString(text, MIME.XML as DOMParserSupportedType);
+        if (looksLikeXMLContent(text)) {
+          const doc = parseOPDSXML(text);
           const {
             documentElement: { localName },
           } = doc;
@@ -272,7 +308,7 @@ export default function BrowserPage() {
           } else {
             const contentType = res.headers.get('Content-Type') ?? MIME.HTML;
             const type = parseMediaType(contentType)?.mediaType ?? MIME.HTML;
-            const htmlDoc = new DOMParser().parseFromString(text, type as DOMParserSupportedType);
+            const htmlDoc = new DOMParser().parseFromString(text, getSafeDOMParserMimeType(type));
 
             if (!htmlDoc.head) {
               stashOPDSReturnTarget(searchParams);
@@ -297,7 +333,16 @@ export default function BrowserPage() {
             }
           }
         } else {
-          const feed = JSON.parse(text);
+          // Defense-in-depth: a non-feed response (e.g. an image returned for a
+          // link that isn't actually a feed) is neither XML nor JSON. Surface a
+          // clear message instead of letting a raw JSON.parse SyntaxError leak
+          // into the error view (readest issue #4599).
+          let feed;
+          try {
+            feed = JSON.parse(text);
+          } catch {
+            throw new Error(_('Content is neither valid XML nor JSON'));
+          }
           const newState = {
             feed,
             baseURL: responseURL,
@@ -326,6 +371,14 @@ export default function BrowserPage() {
   useEffect(() => {
     const url = catalogUrl;
     if (url && !isNavigatingHistoryRef.current) {
+      const loadKey = `${catalogId}::${url}`;
+      // Skip if this effect re-fires for an unrelated `settings` change
+      // (zustand re-renders propagate here through the dep array). The
+      // first run for a given (id,url) is the only one that should issue
+      // a fetch and reset viewMode.
+      if (lastLoadedKeyRef.current === loadKey) {
+        return;
+      }
       const catalog = settings.opdsCatalogs?.find((cat) => cat.id === catalogId);
       const { username, password } = catalog || {};
       if (username || password) {
@@ -337,6 +390,7 @@ export default function BrowserPage() {
       }
       customHeadersRef.current = normalizeOPDSCustomHeaders(catalog?.customHeaders);
       if (libraryLoaded) {
+        lastLoadedKeyRef.current = loadKey;
         loadOPDS(url);
       }
     } else if (isNavigatingHistoryRef.current) {
@@ -379,6 +433,13 @@ export default function BrowserPage() {
         const searchURL = resolveURL(searchLink.href, state.baseURL);
         if (searchLink.type === MIME.OPENSEARCH) {
           handleNavigate(searchURL, true);
+        } else if (searchLink.type === MIME.OPDS2) {
+          // OPDS 2.0 JSON: href is an RFC 6570 URI template (e.g.
+          // `/search{?query}`). Expand it with the typed term BEFORE resolving
+          // against the base URL — resolveURL would otherwise mangle the
+          // `{?query}` template braces and drop the query.
+          const expandedHref = expandOPDSSearchTemplate(searchLink.href, queryTerm);
+          handleNavigate(resolveURL(expandedHref, state.baseURL), true);
         } else if (searchLink.type === MIME.ATOM) {
           const search: OPDSSearch = {
             metadata: {
@@ -416,6 +477,78 @@ export default function BrowserPage() {
     },
     [_, state, handleNavigate, addToHistory],
   );
+
+  const basePublication =
+    selectedPublication && state.feed
+      ? state.feed.groups?.[selectedPublication.groupIndex]?.publications?.[
+          selectedPublication.itemIndex
+        ] || state.feed.publications?.[selectedPublication.itemIndex]
+      : state.publication;
+
+  const fetchPublicationDocument = useCallback(
+    async (url: string): Promise<OPDSPublication | null> => {
+      try {
+        const useProxy = isWebAppPlatform();
+        const username = usernameRef.current || '';
+        const password = passwordRef.current || '';
+        const customHeaders = customHeadersRef.current;
+        const res = await fetchWithAuth(url, username, password, useProxy, {}, customHeaders);
+        if (!res.ok) return null;
+        const text = await res.text();
+        return parsePublicationDocument(text, res.url);
+      } catch (e) {
+        console.warn('Failed to load OPDS publication document:', e);
+        return null;
+      }
+    },
+    [],
+  );
+
+  // When a publication is listed in summary form but advertises a `rel="self"`
+  // link to its full document, dereference it and show the richer metadata
+  // (description, publisher, subjects, language) — readest issue #4749, matching
+  // what Thorium does. The summary renders immediately and is upgraded in place
+  // once the document loads; `source` ties the resolved record to the exact
+  // base publication it enriches so a stale fetch can't bleed into the next one.
+  const [detailPublication, setDetailPublication] = useState<{
+    source: OPDSPublication;
+    resolved: OPDSPublication;
+  } | null>(null);
+
+  useEffect(() => {
+    // Only enrich feed-selected summaries; a directly-loaded entry document
+    // (state.publication, no selection) is already the full record.
+    const detailLink =
+      selectedPublication && basePublication
+        ? getPublicationDetailHref(basePublication)
+        : undefined;
+    if (!basePublication || !detailLink) {
+      setDetailPublication(null);
+      return;
+    }
+    let cancelled = false;
+    const url = resolveURL(detailLink.href, state.baseURL);
+    void fetchPublicationDocument(url).then((resolved) => {
+      if (!cancelled && resolved) {
+        setDetailPublication({ source: basePublication, resolved });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPublication, basePublication, state.baseURL, fetchPublicationDocument]);
+
+  const publication = useMemo(() => {
+    if (!basePublication || detailPublication?.source !== basePublication) return basePublication;
+    const { resolved } = detailPublication;
+    // Prefer the full document's metadata; keep the feed's links/cover when the
+    // document omits them so downloads and the cover never regress.
+    return {
+      metadata: resolved.metadata,
+      links: resolved.links?.length ? resolved.links : basePublication.links,
+      images: resolved.images?.length ? resolved.images : basePublication.images,
+    };
+  }, [basePublication, detailPublication]);
 
   const handleDownload = useCallback(
     async (
@@ -457,7 +590,7 @@ export default function BrowserPage() {
 
           const pathname = decodeURIComponent(new URL(url).pathname);
           const ext = getFileExtFromMimeType(parsed?.mediaType) || getFileExtFromPath(pathname);
-          const basename = pathname.replaceAll('/', '_');
+          const basename = uniqueId();
           const filename = ext ? `${basename}.${ext}` : basename;
           let dstFilePath = await appService?.resolveFilePath(filename, 'Cache');
           console.log('Downloading to:', url, dstFilePath);
@@ -484,7 +617,18 @@ export default function BrowserPage() {
           const { library, setLibrary } = useLibraryStore.getState();
           try {
             const book = await appService.importBook(dstFilePath, library);
-            if (user && book && !book.uploadedAt && settings.autoUpload) {
+            if (book && catalogSourceId) {
+              try {
+                await upsertOPDSSourceMapping(appService, {
+                  catalogId: catalogSourceId,
+                  sourceUrl: url,
+                  bookHash: book.hash,
+                });
+              } catch (sourceMapError) {
+                console.error('OPDS: failed to update source map:', sourceMapError);
+              }
+            }
+            if (user && book && !book.uploadedAt && isReadestCloudStorageActive(settings)) {
               setTimeout(() => {
                 transferManager.queueUpload(book);
               }, 3000);
@@ -502,8 +646,7 @@ export default function BrowserPage() {
         throw e;
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [user, state.baseURL, appService, libraryLoaded],
+    [user, state.baseURL, appService, libraryLoaded, catalogSourceId],
   );
 
   const handleStream = useCallback(
@@ -588,6 +731,17 @@ export default function BrowserPage() {
 
       const newURL = new URL(window.location.href);
       newURL.searchParams.set('url', entry.url);
+      // Strip the publication marker when stepping back to a non-publication
+      // view, otherwise a later remount (from Reader → webview back) would
+      // think we should restore a stale detail view that no longer matches.
+      if (!entry.selectedPublication) {
+        newURL.searchParams.delete('pub');
+      } else {
+        newURL.searchParams.set(
+          'pub',
+          `${entry.selectedPublication.groupIndex}:${entry.selectedPublication.itemIndex}`,
+        );
+      }
       window.history.replaceState({}, '', newURL.toString());
     }
   }, [history, historyIndex]);
@@ -606,40 +760,206 @@ export default function BrowserPage() {
 
       const newURL = new URL(window.location.href);
       newURL.searchParams.set('url', entry.url);
+      // Keep the URL pub marker in sync with the entry we're forwarding to,
+      // mirroring handleBack so mount-restore stays correct.
+      if (!entry.selectedPublication) {
+        newURL.searchParams.delete('pub');
+      } else {
+        newURL.searchParams.set(
+          'pub',
+          `${entry.selectedPublication.groupIndex}:${entry.selectedPublication.itemIndex}`,
+        );
+      }
       window.history.replaceState({}, '', newURL.toString());
     }
   }, [history, historyIndex]);
 
-  const handlePublicationSelect = useCallback((groupIndex: number, itemIndex: number) => {
-    setSelectedPublication({ groupIndex, itemIndex });
-    setViewMode('publication');
+  const handlePublicationSelect = useCallback(
+    (groupIndex: number, itemIndex: number, options: { skipUrlPush?: boolean } = {}) => {
+      setSelectedPublication({ groupIndex, itemIndex });
+      setViewMode('publication');
 
-    // Add this publication view to history
-    setHistory((prev) => {
-      const currentEntry = prev[historyIndexRef.current];
-      if (!currentEntry) return prev;
+      // Add this publication view to history
+      setHistory((prev) => {
+        const currentEntry = prev[historyIndexRef.current];
+        if (!currentEntry) return prev;
 
-      const newEntry: HistoryEntry = {
-        url: currentEntry.url,
-        state: currentEntry.state,
-        viewMode: 'publication',
-        selectedPublication: { groupIndex, itemIndex },
-      };
+        const newEntry: HistoryEntry = {
+          url: currentEntry.url,
+          state: currentEntry.state,
+          viewMode: 'publication',
+          selectedPublication: { groupIndex, itemIndex },
+        };
 
-      return [...prev.slice(0, historyIndexRef.current + 1), newEntry];
-    });
-    setHistoryIndex((prev) => prev + 1);
-  }, []);
+        return [...prev.slice(0, historyIndexRef.current + 1), newEntry];
+      });
+      setHistoryIndex((prev) => prev + 1);
+
+      // Reflect the open publication in the browser URL so a later
+      // router.push('/reader') leaves a recoverable entry behind us in the
+      // webview history. When Android Back returns here from the reader,
+      // /opds remounts with `pub=<gi>:<ii>` and the mount-restore effect
+      // below puts us straight back on the detail view instead of dropping
+      // the user on the bare feed list. Skip when called from the restore
+      // path itself (URL already carries the param) to avoid stacking a
+      // duplicate history entry.
+      if (!options.skipUrlPush) {
+        const newURL = new URL(window.location.href);
+        newURL.searchParams.set('pub', `${groupIndex}:${itemIndex}`);
+        window.history.pushState({}, '', newURL.toString());
+      }
+    },
+    [],
+  );
+
+  // Mount-time restore: when /opds remounts with `?pub=<gi>:<ii>` in the
+  // URL (typically because the user pressed Android Back inside the Reader
+  // they had launched from a publication detail), wait for the feed to
+  // finish loading then jump straight back to that detail view. Without
+  // this, the user would be dropped on the book list and lose their place,
+  // and the back-key hook would treat the catalog root as already at the
+  // bottom of in-page history.
+  useEffect(() => {
+    if (didRestorePubRef.current) return;
+    if (!initialPubMarkerRef.current) return;
+    if (viewMode !== 'feed' || !state.feed) return;
+
+    const [giStr, iiStr] = initialPubMarkerRef.current.split(':');
+    const groupIndex = Number(giStr);
+    const itemIndex = Number(iiStr);
+    if (Number.isNaN(groupIndex) || Number.isNaN(itemIndex)) {
+      didRestorePubRef.current = true;
+      return;
+    }
+
+    const pub =
+      state.feed.groups?.[groupIndex]?.publications?.[itemIndex] ||
+      state.feed.publications?.[itemIndex];
+    if (!pub) {
+      // Feed shape no longer matches the stale marker — drop the URL flag
+      // so subsequent in-page navigation doesn't keep trying to restore.
+      didRestorePubRef.current = true;
+      const cleaned = new URL(window.location.href);
+      cleaned.searchParams.delete('pub');
+      window.history.replaceState({}, '', cleaned.toString());
+      return;
+    }
+
+    didRestorePubRef.current = true;
+    handlePublicationSelect(groupIndex, itemIndex, { skipUrlPush: true });
+  }, [viewMode, state.feed, handlePublicationSelect]);
 
   const canGoBack = historyIndex > 0;
   const canGoForward = historyIndex < history.length - 1;
 
-  const publication =
-    selectedPublication && state.feed
-      ? state.feed.groups?.[selectedPublication.groupIndex]?.publications?.[
-          selectedPublication.itemIndex
-        ] || state.feed.publications?.[selectedPublication.itemIndex]
-      : state.publication;
+  // Android Back / Esc inside the OPDS browser: step back through the
+  // browser's own in-page history first (drilled into a sub-feed, opened a
+  // publication detail, ran a search). Only when we're already at the root
+  // of *this* catalog (no internal history to pop) do we close the browser
+  // and return to /library — with `?opds=true` so the standalone OPDS
+  // catalogs dialog re-opens, matching where the user came from.
+  //
+  // Without this hook, Android Back falls through to the webview's default
+  // history-back, which racing with React's unmount of /library makes the
+  // OPDS catalogs dialog disappear before /library re-mounts, so the user
+  // perceives two Back presses to dismiss "the whole OPDS page". The
+  // CatalogDialog rendered on /library also acquires its own
+  // `native-key-down` listener while mounted, and once /opds takes over
+  // there's nothing here to consume Back in its place — this hook fills
+  // that gap.
+  //
+  // `useKeyDownActions` registers `handleKeyDown` once with a stale
+  // `onCancel` closure (its useEffect deps don't include onCancel), so we
+  // route through a ref that always points at the latest handler. Without
+  // this indirection the hook would forever see the first render's
+  // `canGoBack=false` and skip straight to closing the browser even after
+  // the user drilled into a sub-feed.
+  const backOrCloseRef = useRef<() => void>(() => {});
+  backOrCloseRef.current = () => {
+    if (historyIndexRef.current > 0) {
+      handleBack();
+    } else {
+      stashOPDSReturnTarget(searchParams);
+      closeOPDSBrowser(router, searchParams);
+    }
+  };
+  useKeyDownActions({
+    onCancel: () => backOrCloseRef.current(),
+  });
+
+  const [existingBookForPublication, setExistingBookForPublication] = useState<Book | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const metadataMatch = libraryLoaded
+      ? findExistingBookForPublication(publication, library)
+      : null;
+    setExistingBookForPublication(metadataMatch);
+
+    const sourceUrls =
+      publication?.links
+        .filter((link) => {
+          const rels = Array.isArray(link.rel) ? link.rel : [link.rel ?? ''];
+          return link.href && rels.some((rel) => rel.startsWith(REL.ACQ));
+        })
+        .map((link) => resolveURL(link.href!, state.baseURL)) ?? [];
+
+    if (libraryLoaded && appService && catalogSourceId && sourceUrls.length > 0) {
+      void findBookByOPDSSources(appService, {
+        catalogId: catalogSourceId,
+        sourceUrls,
+        library,
+      }).then((book) => {
+        if (!cancelled && book) setExistingBookForPublication(book);
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [appService, catalogSourceId, publication, state.baseURL, library, libraryLoaded]);
+
+  const handleOpenAddCatalog = useCallback(() => {
+    const defaultName =
+      state.feed?.metadata?.title || state.search?.metadata?.title || _('New Catalog');
+    const prefix = catalog?.name ? `${catalog.name} - ` : '';
+    setNewCatalogName(`${prefix}${defaultName}`);
+    setShowAddCatalog(true);
+  }, [state.feed, state.search, catalog, _]);
+
+  const handleConfirmAddCatalog = useCallback(() => {
+    if (!newCatalogName.trim()) return;
+
+    if (useCustomOPDSStore.getState().findByUrl(state.currentURL)) {
+      eventDispatcher.dispatch('toast', {
+        type: 'info',
+        message: _('Catalog already in My Catalogs'),
+        timeout: 2500,
+      });
+      setShowAddCatalog(false);
+      return;
+    }
+
+    useCustomOPDSStore.getState().addCatalog({
+      id: Date.now().toString(),
+      name: newCatalogName.trim(),
+      url: state.currentURL,
+      username: usernameRef.current || undefined,
+      password: passwordRef.current || undefined,
+      customHeaders: customHeadersRef.current,
+      autoDownload: catalog?.autoDownload || false,
+    });
+
+    useCustomOPDSStore.getState().saveCustomOPDSCatalogs(envConfig);
+
+    eventDispatcher.dispatch('toast', {
+      type: 'success',
+      message: _('Catalog added successfully'),
+      timeout: 2500,
+    });
+
+    setShowAddCatalog(false);
+  }, [newCatalogName, state.currentURL, catalog, envConfig, _]);
 
   return (
     <div
@@ -663,6 +983,11 @@ export default function BrowserPage() {
           canGoBack={canGoBack}
           canGoForward={canGoForward}
           hasSearch={hasSearch}
+          feed={state.feed}
+          baseURL={state.baseURL}
+          resolveURL={resolveURL}
+          onNavigate={handleNavigate}
+          onAddCatalog={handleOpenAddCatalog}
         />
       </div>
       <main className='flex-1 overflow-auto'>
@@ -698,6 +1023,7 @@ export default function BrowserPage() {
             resolveURL={resolveURL}
             onGenerateCachedImageUrl={handleGenerateCachedImageUrl}
             isOPDSCatalog={isOPDSCatalog}
+            onAddCatalog={handleOpenAddCatalog}
           />
         )}
 
@@ -705,9 +1031,11 @@ export default function BrowserPage() {
           <PublicationView
             publication={publication}
             baseURL={state.baseURL}
+            existingBook={existingBookForPublication}
             onDownload={handleDownload}
             onStream={handleStream}
             resolveURL={resolveURL}
+            onNavigate={handleNavigate}
             onGenerateCachedImageUrl={handleGenerateCachedImageUrl}
           />
         )}
@@ -721,6 +1049,48 @@ export default function BrowserPage() {
           />
         )}
       </main>
+
+      <Dialog
+        isOpen={showAddCatalog}
+        title={_('Add to My Catalogs')}
+        onClose={() => setShowAddCatalog(false)}
+        boxClassName='sm:max-w-md sm:h-auto'
+        contentClassName='!px-6 !py-4'
+      >
+        <div className='flex flex-col gap-4 pt-2'>
+          <div className='form-control'>
+            <label className='label'>
+              <span className='label-text font-medium text-sm'>{_('Catalog Name')}</span>
+            </label>
+            <input
+              type='text'
+              value={newCatalogName}
+              onChange={(e) => setNewCatalogName(e.target.value)}
+              className='input input-bordered eink-bordered w-full'
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newCatalogName.trim()) {
+                  e.preventDefault();
+                  handleConfirmAddCatalog();
+                }
+              }}
+            />
+          </div>
+          <div className='mt-2 flex justify-end gap-2'>
+            <button className='btn btn-ghost btn-sm' onClick={() => setShowAddCatalog(false)}>
+              {_('Cancel')}
+            </button>
+            <button
+              className='btn btn-primary btn-sm'
+              onClick={handleConfirmAddCatalog}
+              disabled={!newCatalogName.trim()}
+            >
+              {_('Save')}
+            </button>
+          </div>
+        </div>
+      </Dialog>
+
       <Toast />
     </div>
   );

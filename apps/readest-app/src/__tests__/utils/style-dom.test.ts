@@ -26,7 +26,6 @@ import {
   getStyles,
   applyImageStyle,
   keepTextAlignment,
-  applyTableStyle,
 } from '@/utils/style';
 import {
   DEFAULT_BOOK_FONT,
@@ -246,6 +245,27 @@ describe('getThemeCode', () => {
     expect(code.isDarkMode).toBe(false);
   });
 
+  it('uses ambientIsDarkMode when themeMode is ambient', () => {
+    localStorage.setItem('themeMode', 'ambient');
+    localStorage.setItem('ambientIsDarkMode', 'true');
+    localStorage.setItem('systemIsDarkMode', 'false');
+    expect(getThemeCode().isDarkMode).toBe(true);
+
+    localStorage.setItem('ambientIsDarkMode', 'false');
+    expect(getThemeCode().isDarkMode).toBe(false);
+  });
+
+  // themeStore seeds ambientIsDarkMode from the system appearance until the
+  // first lux reading persists a value. getThemeCode has to agree, or the app
+  // chrome and the book content disagree on the very first launch in ambient
+  // mode.
+  it('falls back to systemIsDarkMode when no ambient reading was persisted', () => {
+    localStorage.setItem('themeMode', 'ambient');
+    localStorage.setItem('systemIsDarkMode', 'true');
+    localStorage.removeItem('ambientIsDarkMode');
+    expect(getThemeCode().isDarkMode).toBe(true);
+  });
+
   it('falls back to default theme when custom themeColor not found', () => {
     localStorage.setItem('themeColor', 'nonexistent-theme-xyz');
     localStorage.setItem('themeMode', 'light');
@@ -418,6 +438,33 @@ describe('getStyles', () => {
     expect(css).toContain('background-color: #ffffff !important');
     expect(css).toContain('color: #171717 !important');
   });
+
+  it('scopes the inline-image baseline default to its own class so author values win #4866', () => {
+    const vs = makeViewSettings();
+    const themeCode: ThemeCode = {
+      bg: '#ffffff',
+      fg: '#171717',
+      primary: '#0066cc',
+      palette: {
+        'base-100': '#ffffff',
+        'base-200': '#f2f2f2',
+        'base-300': '#e0e0e0',
+        'base-content': '#171717',
+        neutral: '#cccccc',
+        'neutral-content': '#444444',
+        primary: '#0066cc',
+        secondary: '#3399ff',
+        accent: '#0055aa',
+      },
+      isDarkMode: false,
+    };
+    const css = getStyles(vs, themeCode);
+    // Baseline is opt-in via a dedicated class, not forced on every inline image.
+    expect(css).toMatch(/img\.has-text-siblings-baseline\s*\{[^}]*vertical-align:\s*baseline/);
+    // The size-clamp rule must not carry vertical-align anymore.
+    const clampRule = css.match(/\n\s*img\.has-text-siblings\s*\{[^}]*\}/)![0];
+    expect(clampRule).not.toContain('vertical-align');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -480,6 +527,23 @@ describe('applyImageStyle', () => {
     const img = document.querySelector('img')!;
     expect(img.classList.contains('has-text-siblings')).toBe(false);
   });
+
+  it('applies the baseline default when the image has no author vertical-align', () => {
+    document.body.innerHTML = '<p>Some text <img src="test.png" /> more text</p>';
+    applyImageStyle(document);
+    const img = document.querySelector('img')!;
+    expect(img.classList.contains('has-text-siblings')).toBe(true);
+    expect(img.classList.contains('has-text-siblings-baseline')).toBe(true);
+  });
+
+  it('respects an author-set vertical-align (no baseline default) #4866', () => {
+    document.body.innerHTML =
+      '<p>Some text <img src="test.png" style="vertical-align: -0.15em" /> more text</p>';
+    applyImageStyle(document);
+    const img = document.querySelector('img')!;
+    expect(img.classList.contains('has-text-siblings')).toBe(true);
+    expect(img.classList.contains('has-text-siblings-baseline')).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -538,122 +602,5 @@ describe('keepTextAlignment', () => {
     expect(document.querySelector('p')!.classList.contains('aligned-center')).toBe(true);
     expect(document.querySelector('div')!.classList.contains('aligned-right')).toBe(true);
     expect(document.querySelector('blockquote')!.classList.contains('aligned-justify')).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// applyTableStyle
-// ---------------------------------------------------------------------------
-describe('applyTableStyle', () => {
-  beforeEach(() => {
-    document.body.innerHTML = '';
-  });
-
-  it('applies scale transform to a table with td width attributes', () => {
-    document.body.innerHTML = `
-      <div>
-        <table>
-          <tr>
-            <td width="100">Cell 1</td>
-            <td width="200">Cell 2</td>
-          </tr>
-        </table>
-      </div>
-    `;
-    applyTableStyle(document);
-    const table = document.querySelector('table')!;
-    // totalTableWidth = 100 + 200 = 300
-    expect(table.style.transform).toContain('scale(');
-    expect(table.style.transform).toContain('300');
-    expect(table.style.transformOrigin).toBe('left top');
-  });
-
-  it('applies scale transform using px width from td elements', () => {
-    document.body.innerHTML = `
-      <div>
-        <table>
-          <tr>
-            <td width="150px">Cell 1</td>
-            <td width="250px">Cell 2</td>
-          </tr>
-        </table>
-      </div>
-    `;
-    applyTableStyle(document);
-    const table = document.querySelector('table')!;
-    // totalTableWidth = 150 + 250 = 400
-    expect(table.style.transform).toContain('400');
-  });
-
-  it('uses the widest row when multiple rows exist', () => {
-    document.body.innerHTML = `
-      <div>
-        <table>
-          <tr>
-            <td width="100">A</td>
-            <td width="100">B</td>
-          </tr>
-          <tr>
-            <td width="200">C</td>
-            <td width="300">D</td>
-          </tr>
-        </table>
-      </div>
-    `;
-    applyTableStyle(document);
-    const table = document.querySelector('table')!;
-    // Second row: 200 + 300 = 500
-    expect(table.style.transform).toContain('500');
-  });
-
-  it('applies center-top origin when no cell widths are specified', () => {
-    document.body.innerHTML = `
-      <div style="width: 600px;">
-        <table>
-          <tr>
-            <td>Cell 1</td>
-            <td>Cell 2</td>
-          </tr>
-        </table>
-      </div>
-    `;
-    applyTableStyle(document);
-    const table = document.querySelector('table')!;
-    // No cell widths => totalTableWidth = 0
-    // jsdom getComputedStyle may return parentWidth as "" or "0px" so transform may not be set
-    // But if parentContainerWidth > 0 it would use center top
-    // In jsdom getComputedStyle returns "" for inline styles on div so parentContainerWidth = 0
-    // Neither branch applies; verify no crash
-    expect(table).toBeTruthy();
-  });
-
-  it('handles tables with inline style width on td', () => {
-    document.body.innerHTML = `
-      <div>
-        <table>
-          <tr>
-            <td style="width: 120px;">Cell 1</td>
-            <td style="width: 180px;">Cell 2</td>
-          </tr>
-        </table>
-      </div>
-    `;
-    applyTableStyle(document);
-    const table = document.querySelector('table')!;
-    // totalTableWidth = 120 + 180 = 300
-    expect(table.style.transform).toContain('300');
-  });
-
-  it('does not crash on a table without parent element', () => {
-    // Table at root level inside body
-    document.body.innerHTML = `
-      <table>
-        <tr><td width="100">A</td></tr>
-      </table>
-    `;
-    // body is the parent, which is an Element, so it proceeds
-    applyTableStyle(document);
-    const table = document.querySelector('table')!;
-    expect(table.style.transform).toContain('100');
   });
 });
