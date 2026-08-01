@@ -1955,5 +1955,8 @@
   "This chapter could not be downloaded.": "මෙම පරිච්ඡේදය බාගත නොහැකි විය.",
   "Auto-hide Cursor": "කර්සරය ස්වයංක්‍රීයව සඟවන්න",
   "After a moment of inactivity": "මොහොතක් අක්‍රියව සිටි පසු",
-  "Ambient Mode": "පරිසර ආලෝක ආකාරය"
+  "Ambient Mode": "පරිසර ආලෝක ආකාරය",
+  "Playback": "ධාවනය",
+  "Skip Footnotes": "පාද සටහන් මඟ හරින්න",
+  "Do not read footnotes and footnote markers aloud": "පාද සටහන් සහ පාද සටහන් සලකුණු ශබ්ද නඟා නොකියවන්න"
 }

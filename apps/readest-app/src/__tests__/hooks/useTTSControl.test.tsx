@@ -137,6 +137,7 @@ vi.mock('@/services/tts', () => ({
       setLang: vi.fn(),
       setRate: vi.fn(),
       setSentenceGap: vi.fn(),
+      setSkipFootnotes: vi.fn(),
       supportsGapControl: vi.fn().mockReturnValue(false),
       setVoice: vi.fn(),
       setTargetLang: vi.fn(),

@@ -426,6 +426,7 @@ export const DEFAULT_TTS_CONFIG: TTSConfig = {
   ttsHighlightGranularity: 'word',
   ttsMediaMetadata: 'sentence',
   ttsPlayerStyle: 'full',
+  ttsSkipFootnotes: true,
 };
 
 export const DEFAULT_TRANSLATOR_CONFIG: TranslatorConfig = {

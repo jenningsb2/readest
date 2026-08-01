@@ -1955,5 +1955,8 @@
   "This chapter could not be downloaded.": "Det här kapitlet kunde inte laddas ner.",
   "Auto-hide Cursor": "Dölj muspekaren automatiskt",
   "After a moment of inactivity": "Efter en stunds inaktivitet",
-  "Ambient Mode": "Omgivningsljusläge"
+  "Ambient Mode": "Omgivningsljusläge",
+  "Playback": "Uppspelning",
+  "Skip Footnotes": "Hoppa över fotnoter",
+  "Do not read footnotes and footnote markers aloud": "Läs inte upp fotnoter och fotnotsmarkeringar"
 }

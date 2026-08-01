@@ -2031,5 +2031,8 @@
   "This chapter could not be downloaded.": "Не вдалося завантажити цей розділ.",
   "Auto-hide Cursor": "Автоматично ховати курсор",
   "After a moment of inactivity": "Після короткої бездіяльності",
-  "Ambient Mode": "Режим зовнішнього освітлення"
+  "Ambient Mode": "Режим зовнішнього освітлення",
+  "Playback": "Відтворення",
+  "Skip Footnotes": "Пропускати виноски",
+  "Do not read footnotes and footnote markers aloud": "Не озвучувати виноски та позначки виносок"
 }

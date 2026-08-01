@@ -1955,5 +1955,8 @@
   "This chapter could not be downloaded.": "Δεν ήταν δυνατή η λήψη αυτού του κεφαλαίου.",
   "Auto-hide Cursor": "Αυτόματη απόκρυψη δείκτη",
   "After a moment of inactivity": "Μετά από λίγη αδράνεια",
-  "Ambient Mode": "Λειτουργία περιβάλλοντος φωτισμού"
+  "Ambient Mode": "Λειτουργία περιβάλλοντος φωτισμού",
+  "Playback": "Αναπαραγωγή",
+  "Skip Footnotes": "Παράλειψη υποσημειώσεων",
+  "Do not read footnotes and footnote markers aloud": "Να μην εκφωνούνται οι υποσημειώσεις και οι δείκτες υποσημειώσεων"
 }

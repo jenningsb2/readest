@@ -810,6 +810,9 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
           }
         }
 
+        // Before initViewTTS: the node filter is built per section from this
+        // flag, and toggling it on a live session would desync the timeline.
+        ttsController.setSkipFootnotes(viewSettings.ttsSkipFootnotes ?? true);
         await ttsController.init();
         await ttsController.initViewTTS(ttsFromIndex);
         ttsController.updateHighlightOptions(

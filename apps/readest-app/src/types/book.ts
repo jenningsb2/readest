@@ -329,6 +329,7 @@ export interface TTSConfig {
   ttsHighlightGranularity: TTSHighlightGranularity;
   ttsMediaMetadata: TTSMediaMetadataMode;
   ttsPlayerStyle: TTSPlayerStyle;
+  ttsSkipFootnotes: boolean;
 }
 
 export interface TranslatorConfig {

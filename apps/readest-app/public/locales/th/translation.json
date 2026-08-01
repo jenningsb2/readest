@@ -1917,5 +1917,8 @@
   "This chapter could not be downloaded.": "ไม่สามารถดาวน์โหลดตอนนี้ได้",
   "Auto-hide Cursor": "ซ่อนเคอร์เซอร์อัตโนมัติ",
   "After a moment of inactivity": "หลังจากไม่มีการใช้งานครู่หนึ่ง",
-  "Ambient Mode": "โหมดแสงรอบข้าง"
+  "Ambient Mode": "โหมดแสงรอบข้าง",
+  "Playback": "การเล่น",
+  "Skip Footnotes": "ข้ามเชิงอรรถ",
+  "Do not read footnotes and footnote markers aloud": "ไม่อ่านออกเสียงเชิงอรรถและเครื่องหมายเชิงอรรถ"
 }

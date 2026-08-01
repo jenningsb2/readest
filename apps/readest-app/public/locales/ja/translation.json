@@ -1917,5 +1917,8 @@
   "This chapter could not be downloaded.": "この章はダウンロードできませんでした。",
   "Auto-hide Cursor": "カーソルを自動的に隠す",
   "After a moment of inactivity": "しばらく操作がないとき",
-  "Ambient Mode": "環境光モード"
+  "Ambient Mode": "環境光モード",
+  "Playback": "再生",
+  "Skip Footnotes": "脚注をスキップ",
+  "Do not read footnotes and footnote markers aloud": "脚注と脚注記号を読み上げない"
 }

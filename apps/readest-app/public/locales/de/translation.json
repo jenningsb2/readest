@@ -1955,5 +1955,8 @@
   "This chapter could not be downloaded.": "Dieses Kapitel konnte nicht heruntergeladen werden.",
   "Auto-hide Cursor": "Mauszeiger automatisch ausblenden",
   "After a moment of inactivity": "Nach kurzer Inaktivität",
-  "Ambient Mode": "Umgebungslicht-Modus"
+  "Ambient Mode": "Umgebungslicht-Modus",
+  "Playback": "Wiedergabe",
+  "Skip Footnotes": "Fußnoten überspringen",
+  "Do not read footnotes and footnote markers aloud": "Fußnoten und Fußnotenzeichen nicht vorlesen"
 }

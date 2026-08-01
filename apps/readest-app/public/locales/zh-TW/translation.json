@@ -1917,5 +1917,8 @@
   "This chapter could not be downloaded.": "本章下載失敗。",
   "Auto-hide Cursor": "自動隱藏游標",
   "After a moment of inactivity": "靜止片刻後隱藏",
-  "Ambient Mode": "環境光主題"
+  "Ambient Mode": "環境光主題",
+  "Playback": "播放",
+  "Skip Footnotes": "略過註腳",
+  "Do not read footnotes and footnote markers aloud": "不朗讀註腳與註腳標記"
 }

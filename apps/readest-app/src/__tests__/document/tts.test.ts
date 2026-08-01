@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { textWalker } from 'foliate-js/text-walker.js';
 import { TTS } from 'foliate-js/tts.js';
-import { createRejectFilter } from '@/utils/node';
+import { createTTSNodeFilter } from '@/services/tts/ttsNodeFilter';
 import { filterSSMLWithLang, parseSSMLMarks } from '@/utils/ssml';
 
 const createHTMLDoc = (bodyHTML: string, attrs: Record<string, string> = {}): Document => {
@@ -34,20 +34,8 @@ const stripTags = (ssml: string): string => ssml.replace(/<[^>]+\/?>/g, '').trim
 
 const highlight = vi.fn();
 
-/** Node filter mirroring the footnote rules TTSController passes to TTS. */
-const ttsNodeFilter = createRejectFilter({
-  tags: ['rt', 'canvas', 'br'],
-  classes: [
-    'annotationLayer',
-    'epubtype-footnote',
-    'duokan-footnote-content',
-    'duokan-footnote-item',
-  ],
-  attributeTokens: [
-    { tag: 'aside', attribute: 'epub:type', tokens: ['footnote', 'endnote', 'note', 'rearnote'] },
-  ],
-  contents: [{ tag: 'a', content: /^[\[\(]?[\*\d]+[\)\]]?$/ }],
-});
+/** The production footnote-skipping filter TTSController passes to TTS. */
+const ttsNodeFilter = createTTSNodeFilter(true);
 
 describe('TTS', () => {
   describe('plain HTML document', () => {
@@ -312,6 +300,65 @@ describe('TTS', () => {
 
       expect(combined).toContain('Main content');
       expect(combined).toContain('Sidebar content stays');
+    });
+
+    it('should not read numeric footnote marker links', () => {
+      const doc = createHTMLDoc('<p>A claim in the text<a href="#fn1">[1]</a> continues here.</p>');
+      const tts = new TTS(doc, textWalker, ttsNodeFilter, highlight, 'word');
+      const combined = collectBlocks(tts).join(' ');
+
+      expect(combined).toContain('A claim in the text');
+      expect(combined).toContain('continues here');
+      expect(combined).not.toContain('[1]');
+    });
+
+    it('should not read Unicode superscript or dagger marker links', () => {
+      const doc = createHTMLDoc(
+        '<p>First fact<a href="#fn1">¹</a> and second fact<a href="#fn2"><sup>†</sup></a> here.</p>',
+      );
+      const tts = new TTS(doc, textWalker, ttsNodeFilter, highlight, 'word');
+      const combined = collectBlocks(tts).join(' ');
+
+      expect(combined).toContain('First fact');
+      expect(combined).toContain('and second fact');
+      expect(combined).not.toContain('¹');
+      expect(combined).not.toContain('†');
+    });
+
+    it('should not read noteref links regardless of their text', () => {
+      const doc = createHTMLDoc(
+        '<p>Some statement<a epub:type="noteref" href="#fn1">note 1</a> goes on.</p>' +
+          '<p>Another statement<a role="doc-noteref" href="#fn2">a</a> ends.</p>',
+      );
+      const tts = new TTS(doc, textWalker, ttsNodeFilter, highlight, 'word');
+      const combined = collectBlocks(tts).join(' ');
+
+      expect(combined).toContain('Some statement');
+      expect(combined).toContain('goes on');
+      expect(combined).toContain('Another statement');
+      expect(combined).not.toContain('note 1');
+    });
+
+    it('should still read ordinary links with word content', () => {
+      const doc = createHTMLDoc('<p>Please <a href="https://example.com">visit our site</a>.</p>');
+      const tts = new TTS(doc, textWalker, ttsNodeFilter, highlight, 'word');
+      const combined = collectBlocks(tts).join(' ');
+
+      expect(combined).toContain('visit our site');
+    });
+
+    it('should read footnotes and markers when skipping is disabled', () => {
+      const readAllFilter = createTTSNodeFilter(false);
+      const doc = createHTMLDoc(
+        '<p>Body text<a epub:type="noteref" href="#fn1">[1]</a> here.</p>' +
+          '<aside epub:type="footnote" id="fn1"><p>Footnote content.</p></aside>',
+      );
+      const tts = new TTS(doc, textWalker, readAllFilter, highlight, 'word');
+      const combined = collectBlocks(tts).join(' ');
+
+      expect(combined).toContain('Body text');
+      expect(combined).toContain('[1]');
+      expect(combined).toContain('Footnote content');
     });
 
     it('should keep reading footnote text when no node filter is given', () => {

@@ -2031,5 +2031,8 @@
   "This chapter could not be downloaded.": "Не удалось скачать эту главу.",
   "Auto-hide Cursor": "Автоматически скрывать курсор",
   "After a moment of inactivity": "После короткого бездействия",
-  "Ambient Mode": "Режим внешнего освещения"
+  "Ambient Mode": "Режим внешнего освещения",
+  "Playback": "Воспроизведение",
+  "Skip Footnotes": "Пропускать сноски",
+  "Do not read footnotes and footnote markers aloud": "Не озвучивать сноски и знаки сносок"
 }

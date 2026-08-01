@@ -1955,5 +1955,8 @@
   "This chapter could not be downloaded.": "این فصل دانلود نشد.",
   "Auto-hide Cursor": "پنهان‌سازی خودکار نشانگر",
   "After a moment of inactivity": "پس از مدتی بی‌حرکتی",
-  "Ambient Mode": "حالت نور محیط"
+  "Ambient Mode": "حالت نور محیط",
+  "Playback": "پخش",
+  "Skip Footnotes": "رد کردن پانویس‌ها",
+  "Do not read footnotes and footnote markers aloud": "پانویس‌ها و نشانه‌های پانویس با صدای بلند خوانده نشوند"
 }

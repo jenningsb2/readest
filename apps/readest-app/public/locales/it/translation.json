@@ -1993,5 +1993,8 @@
   "This chapter could not be downloaded.": "Non è stato possibile scaricare questo capitolo.",
   "Auto-hide Cursor": "Nascondi automaticamente il cursore",
   "After a moment of inactivity": "Dopo un momento di inattività",
-  "Ambient Mode": "Modalità luce ambientale"
+  "Ambient Mode": "Modalità luce ambientale",
+  "Playback": "Riproduzione",
+  "Skip Footnotes": "Salta le note a piè di pagina",
+  "Do not read footnotes and footnote markers aloud": "Non leggere ad alta voce le note a piè di pagina e i loro richiami"
 }

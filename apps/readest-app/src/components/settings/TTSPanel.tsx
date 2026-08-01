@@ -41,6 +41,8 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
     settings.globalReadSettings.customTtsHighlightColors || [],
   );
 
+  const [ttsSkipFootnotes, setTtsSkipFootnotes] = useState(viewSettings.ttsSkipFootnotes ?? true);
+
   const [ttsCacheConfig, setTtsCacheConfigState] = useState(getTTSCacheConfig());
 
   const updateTTSCacheConfig = (config: typeof ttsCacheConfig) => {
@@ -57,6 +59,7 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
       ttsHighlightGranularity: setTtsHighlightGranularity as React.Dispatch<
         React.SetStateAction<string>
       >,
+      ttsSkipFootnotes: setTtsSkipFootnotes as React.Dispatch<React.SetStateAction<boolean>>,
     });
   };
 
@@ -89,6 +92,12 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ttsHighlightGranularity]);
+
+  useEffect(() => {
+    if (ttsSkipFootnotes === viewSettings.ttsSkipFootnotes) return;
+    saveViewSettings(envConfig, bookKey, 'ttsSkipFootnotes', ttsSkipFootnotes, false, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ttsSkipFootnotes]);
 
   const handleTTSStyleChange = (style: TTSHighlightStyle) => {
     setTtsHighlightStyle(style);
@@ -138,6 +147,16 @@ const TTSPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset }
         onCustomColorsChange={handleCustomTtsColorsChange}
         data-setting-id='settings.tts.ttsHighlightStyle'
       />
+
+      <BoxedList title={_('Playback')} data-setting-id='settings.tts.playback'>
+        <SettingsSwitchRow
+          label={_('Skip Footnotes')}
+          description={_('Do not read footnotes and footnote markers aloud')}
+          checked={ttsSkipFootnotes}
+          onChange={() => setTtsSkipFootnotes(!ttsSkipFootnotes)}
+          data-setting-id='settings.tts.skipFootnotes'
+        />
+      </BoxedList>
 
       <BoxedList title={_('Media Info')} data-setting-id='settings.tts.mediaMetadata'>
         <SettingsRow label={_('Player Style')} data-setting-id='settings.tts.playerStyle'>

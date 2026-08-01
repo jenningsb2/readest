@@ -2107,5 +2107,8 @@
   "This chapter could not be downloaded.": "تعذر تنزيل هذا الفصل.",
   "Auto-hide Cursor": "إخفاء المؤشر تلقائيًا",
   "After a moment of inactivity": "بعد لحظة من عدم النشاط",
-  "Ambient Mode": "وضع الإضاءة المحيطة"
+  "Ambient Mode": "وضع الإضاءة المحيطة",
+  "Playback": "التشغيل",
+  "Skip Footnotes": "تخطي الحواشي السفلية",
+  "Do not read footnotes and footnote markers aloud": "عدم قراءة الحواشي السفلية وعلاماتها بصوت عالٍ"
 }

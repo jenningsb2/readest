@@ -1993,5 +1993,8 @@
   "This chapter could not be downloaded.": "לא ניתן היה להוריד את הפרק הזה.",
   "Auto-hide Cursor": "הסתרה אוטומטית של הסמן",
   "After a moment of inactivity": "לאחר רגע של חוסר פעילות",
-  "Ambient Mode": "מצב תאורת סביבה"
+  "Ambient Mode": "מצב תאורת סביבה",
+  "Playback": "הפעלה",
+  "Skip Footnotes": "דילוג על הערות שוליים",
+  "Do not read footnotes and footnote markers aloud": "לא להקריא הערות שוליים וסימוני הערות שוליים"
 }

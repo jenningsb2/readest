@@ -1955,5 +1955,8 @@
   "This chapter could not be downloaded.": "Bu bob yuklab olinmadi.",
   "Auto-hide Cursor": "Kursorni avtomatik yashirish",
   "After a moment of inactivity": "Bir oz harakatsizlikdan keyin",
-  "Ambient Mode": "Atrof yorugʻlik rejimi"
+  "Ambient Mode": "Atrof yorugʻlik rejimi",
+  "Playback": "Ijro",
+  "Skip Footnotes": "Izohlarni o'tkazib yuborish",
+  "Do not read footnotes and footnote markers aloud": "Izohlar va izoh belgilarini ovoz chiqarib o'qimaslik"
 }

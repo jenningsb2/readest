@@ -1917,5 +1917,8 @@
   "This chapter could not be downloaded.": "ལེའུ་འདི་ཕབ་ལེན་བྱེད་མ་ཐུབ།",
   "Auto-hide Cursor": "འོད་རྟགས་རང་འགུལ་སྦས་པ།",
   "After a moment of inactivity": "སྐར་ཆ་འགའ་ལས་ཀ་མེད་རྗེས།",
-  "Ambient Mode": "ཁོར་ཡུག་འོད་ཀྱི་བརྗོད་བྱ།"
+  "Ambient Mode": "ཁོར་ཡུག་འོད་ཀྱི་བརྗོད་བྱ།",
+  "Playback": "བསྐྱར་གཏོང་།",
+  "Skip Footnotes": "ཞབས་མཆན་མཆོང་བ།",
+  "Do not read footnotes and footnote markers aloud": "ཞབས་མཆན་དང་ཞབས་མཆན་གྱི་རྟགས་རྣམས་མི་ཀློག་པ།"
 }

@@ -1917,5 +1917,8 @@
   "This chapter could not be downloaded.": "Bab ini tidak dapat diunduh.",
   "Auto-hide Cursor": "Sembunyikan kursor otomatis",
   "After a moment of inactivity": "Setelah beberapa saat tidak aktif",
-  "Ambient Mode": "Mode Cahaya Sekitar"
+  "Ambient Mode": "Mode Cahaya Sekitar",
+  "Playback": "Pemutaran",
+  "Skip Footnotes": "Lewati Catatan Kaki",
+  "Do not read footnotes and footnote markers aloud": "Jangan bacakan catatan kaki dan penanda catatan kaki"
 }

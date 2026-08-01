@@ -2031,5 +2031,8 @@
   "This chapter could not be downloaded.": "Tega poglavja ni bilo mogoče prenesti.",
   "Auto-hide Cursor": "Samodejno skrij kazalec",
   "After a moment of inactivity": "Po trenutku nedejavnosti",
-  "Ambient Mode": "Način osvetlitve okolice"
+  "Ambient Mode": "Način osvetlitve okolice",
+  "Playback": "Predvajanje",
+  "Skip Footnotes": "Preskoči sprotne opombe",
+  "Do not read footnotes and footnote markers aloud": "Sprotnih opomb in njihovih oznak ne beri naglas"
 }

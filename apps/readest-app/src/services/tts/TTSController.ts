@@ -11,7 +11,7 @@ import {
   TTSMark,
   TTSVoice,
 } from './types';
-import { createRejectFilter } from '@/utils/node';
+import { createTTSNodeFilter } from './ttsNodeFilter';
 import { WebSpeechClient } from './WebSpeechClient';
 import { NativeTTSClient } from './NativeTTSClient';
 import { EdgeTTSClient } from './EdgeTTSClient';
@@ -75,31 +75,6 @@ export interface TTSViewBindings {
   onSectionChange?: (sectionIndex: number) => Promise<void>;
 }
 
-// Node filter shared by the live TTS instance and the timeline enumeration —
-// the two MUST segment identically or timeline sentences drift from marks.
-const createTTSNodeFilter = () =>
-  createRejectFilter({
-    tags: ['rt', 'canvas', 'br'],
-    // Footnotes/endnotes are hidden in the rendered page (see the
-    // `.epubtype-footnote`/`aside[epub|type]` rules in getPageLayoutStyles);
-    // skip them in TTS too, including for background sections whose
-    // documents are loaded without those styles.
-    classes: [
-      'annotationLayer',
-      'epubtype-footnote',
-      'duokan-footnote-content',
-      'duokan-footnote-item',
-    ],
-    attributeTokens: [
-      {
-        tag: 'aside',
-        attribute: 'epub:type',
-        tokens: ['footnote', 'endnote', 'note', 'rearnote'],
-      },
-    ],
-    contents: [{ tag: 'a', content: /^[\[\(]?[\*\d]+[\)\]]?$/ }],
-  });
-
 // Silence inserted between paragraphs when auto-advancing during continuous
 // playback. Unlike the Edge-only inter-sentence gap, this applies to every
 // TTS client: the paragraph-to-paragraph transition (stop -> next -> speak)
@@ -123,6 +98,12 @@ export class TTSController extends EventTarget {
   // continuation (see forward()'s isAutoAdvance), never user navigation.
   stopAtChapterEnd: boolean = false;
   #paragraphGapSec: number = DEFAULT_PARAGRAPH_GAP_SEC;
+  // Whether the TTS node filter drops footnote content and reference markers
+  // (viewSettings.ttsSkipFootnotes). Set once before initViewTTS: the live TTS
+  // instance, the timeline, and the downloader all build filters from this
+  // field, and they MUST segment identically or timeline sentences drift from
+  // marks — never toggle it while a session is live.
+  #skipFootnotes: boolean = true;
   #nossmlCnt: number = 0;
   // Consecutive native-TTS utterances that ended in a terminal 'error' without
   // a successful 'end' in between. Reset on success; caps skip-on-error so a
@@ -314,7 +295,7 @@ export class TTSController extends EventTarget {
     const newTts = new TTS(
       doc,
       textWalker,
-      createTTSNodeFilter(),
+      createTTSNodeFilter(this.#skipFootnotes),
       this.#getHighlighter(),
       this.#ttsGranularity,
     );
@@ -527,7 +508,7 @@ export class TTSController extends EventTarget {
     this.#tts = new TTS(
       doc,
       textWalker,
-      createTTSNodeFilter(),
+      createTTSNodeFilter(this.#skipFootnotes),
       this.#getHighlighter(),
       granularity,
     );
@@ -553,7 +534,7 @@ export class TTSController extends EventTarget {
     for (const entry of getSentences(
       doc,
       textWalker,
-      createTTSNodeFilter(),
+      createTTSNodeFilter(this.#skipFootnotes),
       this.#ttsGranularity,
     )) {
       sentences.push({ ...entry, text: entry.range.toString() });
@@ -627,7 +608,7 @@ export class TTSController extends EventTarget {
           const doc = await this.#createSectionDoc(section);
           const { TTS, getSentences } = await import('foliate-js/tts.js');
           const { textWalker } = await import('foliate-js/text-walker.js');
-          const nodeFilter = createTTSNodeFilter();
+          const nodeFilter = createTTSNodeFilter(this.#skipFootnotes);
           let granularity: TTSGranularity = this.view.language.isCJK ? 'sentence' : 'word';
           const supported = edge.getGranularities();
           if (!supported.includes(granularity)) granularity = supported[0]!;
@@ -714,6 +695,13 @@ export class TTSController extends EventTarget {
   // DEFAULT_PARAGRAPH_GAP_SEC and #delayParagraphGap for where it's applied.
   setParagraphGap(sec: number): void {
     this.#paragraphGapSec = sec;
+  }
+
+  // Must be called before initViewTTS: node filters are built per section from
+  // this field and every consumer (live TTS, timeline, downloader) has to
+  // segment identically — see the #skipFootnotes field comment.
+  setSkipFootnotes(enabled: boolean): void {
+    this.#skipFootnotes = enabled;
   }
 
   // Abortable delay inserted before auto-advancing to the next paragraph.

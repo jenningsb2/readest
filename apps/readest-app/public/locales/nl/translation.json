@@ -1955,5 +1955,8 @@
   "This chapter could not be downloaded.": "Dit hoofdstuk kon niet worden gedownload.",
   "Auto-hide Cursor": "Cursor automatisch verbergen",
   "After a moment of inactivity": "Na een moment van inactiviteit",
-  "Ambient Mode": "Omgevingslichtmodus"
+  "Ambient Mode": "Omgevingslichtmodus",
+  "Playback": "Afspelen",
+  "Skip Footnotes": "Voetnoten overslaan",
+  "Do not read footnotes and footnote markers aloud": "Voetnoten en voetnootmarkeringen niet voorlezen"
 }

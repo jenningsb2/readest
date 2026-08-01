@@ -1993,5 +1993,8 @@
   "This chapter could not be downloaded.": "Acest capitol nu a putut fi descărcat.",
   "Auto-hide Cursor": "Ascunde automat cursorul",
   "After a moment of inactivity": "După un moment de inactivitate",
-  "Ambient Mode": "Modul lumină ambientală"
+  "Ambient Mode": "Modul lumină ambientală",
+  "Playback": "Redare",
+  "Skip Footnotes": "Omite notele de subsol",
+  "Do not read footnotes and footnote markers aloud": "Nu citi cu voce tare notele de subsol și marcajele acestora"
 }

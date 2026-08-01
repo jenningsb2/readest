@@ -1955,5 +1955,8 @@
   "This chapter could not be downloaded.": "இந்த அத்தியாயத்தைப் பதிவிறக்க முடியவில்லை.",
   "Auto-hide Cursor": "கர்சரைத் தானாக மறை",
   "After a moment of inactivity": "சிறிது நேரம் செயலற்ற பிறகு",
-  "Ambient Mode": "சுற்றுப்புற ஒளி பயன்முறை"
+  "Ambient Mode": "சுற்றுப்புற ஒளி பயன்முறை",
+  "Playback": "இயக்கம்",
+  "Skip Footnotes": "அடிக்குறிப்புகளைத் தவிர்",
+  "Do not read footnotes and footnote markers aloud": "அடிக்குறிப்புகளையும் அடிக்குறிப்புக் குறிகளையும் சத்தமாக வாசிக்க வேண்டாம்"
 }

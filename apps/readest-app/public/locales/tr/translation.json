@@ -1955,5 +1955,8 @@
   "This chapter could not be downloaded.": "Bu bölüm indirilemedi.",
   "Auto-hide Cursor": "İmleci otomatik gizle",
   "After a moment of inactivity": "Kısa bir hareketsizlikten sonra",
-  "Ambient Mode": "Ortam Işığı Modu"
+  "Ambient Mode": "Ortam Işığı Modu",
+  "Playback": "Oynatma",
+  "Skip Footnotes": "Dipnotları atla",
+  "Do not read footnotes and footnote markers aloud": "Dipnotları ve dipnot işaretlerini sesli okuma"
 }

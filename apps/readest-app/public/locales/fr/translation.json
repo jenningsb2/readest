@@ -1993,5 +1993,8 @@
   "This chapter could not be downloaded.": "Ce chapitre n’a pas pu être téléchargé.",
   "Auto-hide Cursor": "Masquer automatiquement le curseur",
   "After a moment of inactivity": "Après un moment d'inactivité",
-  "Ambient Mode": "Mode lumière ambiante"
+  "Ambient Mode": "Mode lumière ambiante",
+  "Playback": "Lecture",
+  "Skip Footnotes": "Ignorer les notes de bas de page",
+  "Do not read footnotes and footnote markers aloud": "Ne pas lire à voix haute les notes de bas de page et leurs appels de note"
 }

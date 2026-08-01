@@ -2031,5 +2031,8 @@
   "This chapter could not be downloaded.": "Nie udało się pobrać tego rozdziału.",
   "Auto-hide Cursor": "Automatycznie ukrywaj kursor",
   "After a moment of inactivity": "Po chwili bezczynności",
-  "Ambient Mode": "Tryb światła otoczenia"
+  "Ambient Mode": "Tryb światła otoczenia",
+  "Playback": "Odtwarzanie",
+  "Skip Footnotes": "Pomijaj przypisy",
+  "Do not read footnotes and footnote markers aloud": "Nie czytaj na głos przypisów ani znaczników przypisów"
 }

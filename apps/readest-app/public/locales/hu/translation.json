@@ -1955,5 +1955,8 @@
   "This chapter could not be downloaded.": "Ezt a fejezetet nem sikerült letölteni.",
   "Auto-hide Cursor": "Kurzor automatikus elrejtése",
   "After a moment of inactivity": "Rövid tétlenség után",
-  "Ambient Mode": "Környezeti fény mód"
+  "Ambient Mode": "Környezeti fény mód",
+  "Playback": "Lejátszás",
+  "Skip Footnotes": "Lábjegyzetek kihagyása",
+  "Do not read footnotes and footnote markers aloud": "Ne olvassa fel a lábjegyzeteket és a lábjegyzetjelöléseket"
 }

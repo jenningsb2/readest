@@ -1955,5 +1955,8 @@
   "This chapter could not be downloaded.": "यह अध्याय डाउनलोड नहीं हो सका।",
   "Auto-hide Cursor": "कर्सर स्वतः छिपाएँ",
   "After a moment of inactivity": "कुछ देर निष्क्रिय रहने पर",
-  "Ambient Mode": "परिवेश मोड"
+  "Ambient Mode": "परिवेश मोड",
+  "Playback": "प्लेबैक",
+  "Skip Footnotes": "फ़ुटनोट छोड़ें",
+  "Do not read footnotes and footnote markers aloud": "फ़ुटनोट और फ़ुटनोट चिह्नों को ज़ोर से न पढ़ें"
 }
